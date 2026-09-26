@@ -24,15 +24,22 @@ from typing import Callable, Optional
 from .actions import Action, InputEvent
 from .channel import Channel, ChannelLineup, PlayRequest, build_lineup
 from .config import Config
+from .input.keymap import MPV_WINDOW_KEYS, action_from_name
 from .input.manager import InputManager, create_backends
+from .media_watch import MediaWatch
 from .overlay import OverlayManager
 from .player import END_EOF, END_ERROR, MockPlayer, Player
+from .state import save_state
 from .static_gen import (
     COLORBARS_FILENAME,
     DEFAULT_ASSETS_DIR,
     GLITCH_FILENAME,
     STATIC_FILENAME,
 )
+
+# How long the "RESUMING - PRESS OK TO START OVER" banner stays live and
+# listening for an OK/ENTER press before it just... resumes.
+RESUME_OFFER_SECONDS = 6.0
 
 log = logging.getLogger(__name__)
 
@@ -49,10 +56,14 @@ class TVApp:
         overlay: Optional[OverlayManager] = None,
         clock: Callable[[], float] = time.monotonic,
         assets_dir: Optional[Path] = None,
+        media_watch: Optional[MediaWatch] = None,
     ) -> None:
         self.config = config
         self.player = player
         self.input = input_manager
+        # Set when running as an appliance (--hotplug): stop, and let systemd
+        # restart us with a fresh scan, when the drive goes away or changes.
+        self._media_watch = media_watch
         self.overlay = overlay or OverlayManager(player, config, clock=clock)
         self._clock = clock
 
@@ -64,6 +75,7 @@ class TVApp:
         self.standby = False
         self.powered_off = False
         self._playing_path: Optional[Path] = None
+        self._playing_is_break = False
         self._last_channel_number: Optional[int] = None
         self._running = False
 
@@ -72,15 +84,28 @@ class TVApp:
         self._digit_deadline = 0.0
         self._digit_entry_timeout = 2.0
 
+        # Passcode entry for a locked channel. None = not currently entering a
+        # code; "" or more = the digits typed so far. While this is set, DIGIT
+        # and ENTER events go here instead of the channel-number entry above.
+        self._code_buffer: Optional[str] = None
+
+        # The "RESUMING - PRESS OK TO START OVER" banner window: an ENTER press
+        # before this deadline discards the resume position and starts fresh.
+        self._resume_offer_until: Optional[float] = None
+
         # Pending "bridge" switch: keep the old show playing until this deadline,
         # then cut to the channel that was preloaded. The channel banner is shown
         # at the moment of the cut-over, not when the button is pressed.
         self._switch_deadline: Optional[float] = None
-        self._pending_banner: Optional[tuple[int, str]] = None
+        self._pending_banner: Optional[tuple[int, str, Optional[str]]] = None
 
         # Playback-finished events from the player (may arrive on any thread).
         self._ended: "queue.Queue[str]" = queue.Queue()
         self.player.on_end = self._ended.put
+        # Keys pressed in the player's own video window arrive the same way as
+        # any other remote: on the input queue. Players without a window of
+        # their own simply never call this.
+        self.player.on_key = self._on_window_key
 
         # Filler assets.
         self._assets_dir = assets_dir or config.assets_dir or DEFAULT_ASSETS_DIR
@@ -98,6 +123,7 @@ class TVApp:
         input_manager: Optional[InputManager] = None,
         dry_run: bool = False,
         assets_dir: Optional[Path] = None,
+        media_watch: Optional[MediaWatch] = None,
     ) -> "TVApp":
         """Build a fully wired app, creating real hardware backends by default.
 
@@ -105,22 +131,6 @@ class TVApp:
         backends (a stdin backend is added if a TTY is available), which is how
         the box can be exercised on a development machine.
         """
-        if player is None:
-            if dry_run:
-                player = MockPlayer(verbose=True)
-            else:
-                from .crt import write_shader
-                from .player import MpvPlayer
-
-                assets = assets_dir or config.assets_dir or DEFAULT_ASSETS_DIR
-                shader_path = write_shader(config.crt)
-                player = MpvPlayer(
-                    glsl_shaders=str(shader_path) if shader_path else None,
-                    fonts_dir=assets / "fonts",
-                    force_4_3=config.force_4_3,
-                    audio_device=config.audio_device,
-                )
-
         if input_manager is None:
             if dry_run:
                 backends = create_backends({"keyboard": False, "cec": False, "stdin": True})
@@ -128,7 +138,30 @@ class TVApp:
                 backends = create_backends(config.input_options)
             input_manager = InputManager(backends)
 
-        return cls(config, player, input_manager, assets_dir=assets_dir)
+        if player is None:
+            if dry_run:
+                player = MockPlayer(verbose=True)
+            else:
+                from .crt import write_shader
+                from .player import create_player
+
+                assets = assets_dir or config.assets_dir or DEFAULT_ASSETS_DIR
+                shader_path = write_shader(config.crt)
+                player = create_player(
+                    config.player_backend,
+                    fullscreen=config.fullscreen,
+                    hwdec=config.hwdec,
+                    glsl_shaders=str(shader_path) if shader_path else None,
+                    fonts_dir=assets / "fonts",
+                    force_4_3=config.force_4_3,
+                    audio_device=config.audio_device,
+                    window_keys=_window_keys_for(input_manager),
+                    crt_max_height=config.crt.max_height,
+                )
+
+        return cls(
+            config, player, input_manager, assets_dir=assets_dir, media_watch=media_watch
+        )
 
     # -- lifecycle ----------------------------------------------------------
     def start(self) -> None:
@@ -154,6 +187,7 @@ class TVApp:
 
     def shutdown(self) -> None:
         self._running = False
+        self._remember_position()
         try:
             self.overlay.clear_all()
         except Exception:  # noqa: BLE001
@@ -169,9 +203,16 @@ class TVApp:
         at most one queued input event.
         """
         now = self._clock()
+        if self._media_watch is not None:
+            reason = self._media_watch.changed()
+            if reason is not None:
+                log.info("media changed: %s - stopping so a restart re-indexes", reason)
+                self._running = False
+                return
         self.overlay.tick()
         self._maybe_commit_switch(now)
         self._maybe_commit_digits(now)
+        self._maybe_expire_resume_offer(now)
         self._drain_playback_events()
 
         event = self.input.get(timeout=timeout if block else 0.0)
@@ -185,8 +226,23 @@ class TVApp:
             self.player.commit_switch()
             # Flash the channel banner right as the picture actually changes.
             if self._pending_banner is not None:
-                self.overlay.show_channel_bug(*self._pending_banner)
+                number, name, subtitle = self._pending_banner
+                self.overlay.show_channel_bug(number, name, subtitle=subtitle)
                 self._pending_banner = None
+
+    def _maybe_expire_resume_offer(self, now: float) -> None:
+        if self._resume_offer_until is not None and now >= self._resume_offer_until:
+            self._resume_offer_until = None
+
+    def _on_window_key(self, action_name: str) -> None:
+        """Turn a key from the player's video window into a queued input event."""
+        try:
+            event = action_from_name(action_name)
+        except ValueError:
+            log.debug("ignoring unknown window key action %r", action_name)
+            return
+        if event is not None:
+            self.input.put(event)
 
     # -- input handling -----------------------------------------------------
     def handle_event(self, event: InputEvent) -> None:
@@ -203,6 +259,25 @@ class TVApp:
         if self.standby:
             return
 
+        # A locked channel's lock screen is showing: digits/ENTER go to the
+        # passcode entry instead of channel-number entry. Channel-nav cancels
+        # entry and lets the surf-away happen normally (falls through below).
+        if self._code_buffer is not None:
+            if action == Action.DIGIT:
+                self._push_code_digit(event.value or 0)
+                return
+            if action == Action.ENTER:
+                self._submit_code()
+                return
+            if action in (Action.CHANNEL_UP, Action.CHANNEL_DOWN, Action.LAST_CHANNEL):
+                self._code_buffer = None
+
+        # The "RESUMING..." banner is up and listening for an OK press.
+        if action == Action.ENTER and self._resume_offer_until is not None:
+            self._resume_offer_until = None
+            self._restart_without_resume()
+            return
+
         handlers = {
             Action.CHANNEL_UP: self._channel_up,
             Action.CHANNEL_DOWN: self._channel_down,
@@ -211,6 +286,9 @@ class TVApp:
             Action.MUTE: self._toggle_mute,
             Action.INFO: self._show_info,
             Action.LAST_CHANNEL: self._jump_last_channel,
+            Action.HOME: self._jump_home,
+            Action.NEXT_EPISODE: lambda: self._skip_episode(forward=True),
+            Action.PREVIOUS_EPISODE: lambda: self._skip_episode(forward=False),
             Action.ENTER: self._confirm_digits,
         }
         if action == Action.DIGIT:
@@ -244,6 +322,19 @@ class TVApp:
         self.lineup.select_number(target)
         self.tune_current()
 
+    def _jump_home(self) -> None:
+        """The remote's HOME button: go straight to the welcome / guide channel.
+
+        Falls back to the channel the box boots on, so a config that only sets
+        ``start_channel`` still has a working HOME button.
+        """
+        target = self.config.home_channel
+        if target is None:
+            target = self.config.start_channel
+        if target is None:
+            return
+        self.select_channel_number(target)
+
     def select_channel_number(self, number: int) -> bool:
         """Tune directly to a channel number. Returns False if it doesn't exist."""
         if not self.lineup.has_number(number):
@@ -262,26 +353,60 @@ class TVApp:
         """Tune into the currently selected channel."""
         channel = self.lineup.current
         self.overlay.clear_standby()
+        self._code_buffer = None
+        self._resume_offer_until = None
 
         request = channel.tune_in()
         self._pending_banner = None
 
         if request is None:
-            # No episodes on this channel: show the "no signal" screen.
+            # No episodes, or the channel is passcode-locked: show a slate.
             self.overlay.show_channel_bug(channel.number, channel.name)
             self._show_no_signal(channel)
             return
 
+        subtitle: Optional[str] = None
+        if request.resumed:
+            subtitle = "RESUMING - PRESS OK TO START OVER"
+            self._resume_offer_until = self._clock() + RESUME_OFFER_SECONDS
+
+        self._present(channel, request, show_static=show_static, subtitle=subtitle)
+
+    def _skip_episode(self, *, forward: bool) -> None:
+        """The remote's ◀ / ▶: the previous or next episode on this channel.
+
+        Presented exactly like a channel change - same bridge or transition, same
+        banner - so it feels like the same television. Anything the channel
+        can't skip (locked, empty, broadcast, a lone episode) is a quiet no-op.
+        """
+        channel = self.lineup.current
+        request = channel.skip() if forward else channel.back()
+        if request is None:
+            return
+        self._resume_offer_until = None
+        self._pending_banner = None
+        self._present(channel, request)
+
+    def _present(
+        self,
+        channel: Channel,
+        request: PlayRequest,
+        *,
+        show_static: bool = True,
+        subtitle: Optional[str] = None,
+    ) -> None:
+        """Put ``request`` on screen, using the configured changeover style."""
         if not show_static:
             # Not a channel change (first tune / waking from standby): play now.
             self._switch_deadline = None
-            self.overlay.show_channel_bug(channel.number, channel.name)
+            self.overlay.show_channel_bug(channel.number, channel.name, subtitle=subtitle)
             self._play_request(request)
         elif self._transition_path is not None:
             # Transition clip (glitch/static) + preloaded episode.
             self._switch_deadline = None
-            self.overlay.show_channel_bug(channel.number, channel.name)
+            self.overlay.show_channel_bug(channel.number, channel.name, subtitle=subtitle)
             self._playing_path = request.path
+            self._playing_is_break = request.is_break
             self.player.play_transition(
                 self._transition_path,
                 request.path,
@@ -293,29 +418,39 @@ class TVApp:
             # channel preloads, then cut over (no frozen frame). The banner is
             # shown at the cut-over (see _maybe_commit_switch), not right now.
             self._playing_path = request.path
+            self._playing_is_break = request.is_break
             self.player.preload_next(request.path, start=request.start)
             self._switch_deadline = self._clock() + self.config.bridge_seconds
-            self._pending_banner = (channel.number, channel.name)
+            self._pending_banner = (channel.number, channel.name, subtitle)
         else:
             self._switch_deadline = None
-            self.overlay.show_channel_bug(channel.number, channel.name)
+            self.overlay.show_channel_bug(channel.number, channel.name, subtitle=subtitle)
             self._play_request(request)
 
     def _play_request(self, request: PlayRequest) -> None:
         self._playing_path = request.path
+        self._playing_is_break = request.is_break
         self.player.play(request.path, start=request.start)
 
     def _show_no_signal(self, channel: Channel) -> None:
         self._switch_deadline = None
         self._pending_banner = None
         self._playing_path = None
+        self._playing_is_break = False
         if self._colorbars_path is not None:
             self.player.play_loop(self._colorbars_path)
         else:
             self.player.stop()
-        self.overlay.show_message(
-            f"CH {channel.number:02d}  {channel.name}  -  NO SIGNAL", duration=6.0
-        )
+        if channel.locked:
+            self._code_buffer = ""
+            text = channel.config.locked_message or (
+                f"CH {channel.number:02d}  {channel.name}  -  LOCKED"
+            )
+            self.overlay.show_message(f"{text}\nENTER CODE", duration=0)
+        else:
+            self.overlay.show_message(
+                f"CH {channel.number:02d}  {channel.name}  -  NO SIGNAL", duration=6.0
+            )
 
     # -- volume -------------------------------------------------------------
     def _volume_up(self) -> None:
@@ -342,6 +477,8 @@ class TVApp:
         self.powered_off = True
         self._switch_deadline = None
         self._pending_banner = None
+        self._relock_all()
+        self._save_state()
         try:
             self.overlay.clear_all()
             self.overlay.show_message("GOODBYE", duration=0)
@@ -376,12 +513,19 @@ class TVApp:
             self._remember_position()
             self._switch_deadline = None
             self._pending_banner = None
+            self._code_buffer = None
+            self._relock_all()
             self.player.stop()
             self.overlay.clear_all()
             self.overlay.show_standby()
         else:
             self.overlay.clear_standby()
             self.tune_current(show_static=False)
+
+    def _relock_all(self) -> None:
+        """Re-lock every passcode-gated channel (standby/power-off fail-safe)."""
+        for channel in self.lineup:
+            channel.relock()
 
     # -- direct channel entry ----------------------------------------------
     def _push_digit(self, digit: int) -> None:
@@ -400,6 +544,37 @@ class TVApp:
     def _maybe_commit_digits(self, now: float) -> None:
         if self._digit_buffer and now >= self._digit_deadline:
             self._confirm_digits()
+
+    # -- passcode entry -------------------------------------------------------
+    def _push_code_digit(self, digit: int) -> None:
+        channel = self.lineup.current
+        max_len = len(channel.config.passcode or "0000")
+        self._code_buffer = ((self._code_buffer or "") + str(digit))[-max_len:]
+        masked = "*" * len(self._code_buffer) + "_"
+        text = channel.config.locked_message or (
+            f"CH {channel.number:02d}  {channel.name}  -  LOCKED"
+        )
+        self.overlay.show_message(f"{text}\nCODE: {masked}", duration=0)
+        if len(self._code_buffer) >= max_len:
+            self._submit_code()
+
+    def _submit_code(self) -> None:
+        channel = self.lineup.current
+        code = self._code_buffer or ""
+        self._code_buffer = None
+        if channel.unlock(code):
+            self.tune_current(show_static=False)
+        else:
+            self._code_buffer = ""
+            text = channel.config.locked_message or (
+                f"CH {channel.number:02d}  {channel.name}  -  LOCKED"
+            )
+            self.overlay.show_message(f"{text}\nINCORRECT - TRY AGAIN", duration=2.5)
+
+    # -- resume banner ----------------------------------------------------
+    def _restart_without_resume(self) -> None:
+        self.lineup.current.forget_resume()
+        self.tune_current(show_static=False)
 
     # -- playback-finished handling ----------------------------------------
     def _drain_playback_events(self) -> None:
@@ -423,11 +598,27 @@ class TVApp:
 
     # -- helpers ------------------------------------------------------------
     def _remember_position(self) -> None:
-        if self.config.tune_in != "resume" or self._playing_path is None:
+        channel = self.lineup.current
+        if channel.tune_in_mode != "resume" or self._playing_path is None:
+            return
+        if self._playing_is_break:
+            # A break clip is not the show itself - never resume into one.
             return
         pos = self.player.get_time_pos()
         if pos is not None:
-            self.lineup.current.remember(self._playing_path, pos)
+            channel.remember(self._playing_path, pos)
+            self._save_state()
+
+    def _save_state(self) -> None:
+        if self.config.state_file is None:
+            return
+        data = {}
+        for channel in self.lineup:
+            snapshot = channel.resume_snapshot
+            if snapshot is not None:
+                path, pos = snapshot
+                data[channel.number] = {"path": str(path), "position": pos}
+        save_state(self.config.state_file, data)
 
     def _select_start_channel(self) -> None:
         if self.config.start_channel is not None and self.lineup.has_number(
@@ -447,10 +638,80 @@ class TVApp:
         return self._resolve_asset(filename)
 
 
-def run_from_config(config: Config, *, dry_run: bool = False) -> None:
-    """Convenience entry point used by the CLI."""
-    app = TVApp.from_config(config, dry_run=dry_run)
+def _window_keys_for(input_manager: InputManager) -> Optional[dict]:
+    """The keys the video window should accept, or None if it should take none.
+
+    A real remote or USB keyboard is read straight from its device by the
+    evdev backend, whatever window has focus. Letting the video window take the
+    same keys as well would act on every button press twice, so on a box with
+    that backend running the window stays deaf.
+    """
+    if any(backend.name == "keyboard" for backend in input_manager.backends):
+        return None
+    return MPV_WINDOW_KEYS
+
+
+def run_from_config(
+    config: Config,
+    *,
+    dry_run: bool = False,
+    config_path: Optional[Path] = None,
+    hotplug: bool = False,
+) -> None:
+    """Convenience entry point used by the CLI.
+
+    ``hotplug`` is appliance mode: watch the config file and channel folders,
+    and return (so systemd restarts us with a fresh scan) when they change.
+    """
+    watch = None
+    if hotplug and config_path is not None:
+        watch = MediaWatch(config_path, [ch.path for ch in config.channels])
+    app = TVApp.from_config(config, dry_run=dry_run, media_watch=watch)
     app.run()
 
 
-__all__ = ["TVApp", "run_from_config"]
+def wait_for_media(config_path: Path, *, fullscreen: bool = True, dry_run: bool = False) -> None:
+    """Appliance mode, drive not connected: show a "no signal" card and wait.
+
+    Without this, a box switched on without its drive would fail to start and
+    leave a login prompt on the TV. Instead it shows muted colour bars and a
+    message, and carries on by itself the moment the drive is plugged in.
+    """
+    from .media_watch import wait_for_file
+
+    if config_path.is_file():
+        return
+    shown: list = []
+
+    def show_card() -> None:
+        config = Config(channels=[], fullscreen=fullscreen)
+        if dry_run:
+            player: Player = MockPlayer(verbose=True)
+        else:
+            from .player import create_player
+
+            player = create_player(
+                config.player_backend,
+                fullscreen=config.fullscreen,
+                hwdec=config.hwdec,
+                fonts_dir=DEFAULT_ASSETS_DIR / "fonts",
+                force_4_3=config.force_4_3,
+            )
+        player.set_mute(True)  # the colour bars carry a 1 kHz tone
+        colorbars = DEFAULT_ASSETS_DIR / COLORBARS_FILENAME
+        if colorbars.is_file():
+            player.play_loop(colorbars)
+        OverlayManager(player, config).show_message(
+            "NO SIGNAL\nCONNECT THE MEDIA DRIVE", duration=0
+        )
+        shown.append(player)
+
+    try:
+        wait_for_file(config_path, on_first_miss=show_card)
+    finally:
+        for player in shown:
+            player.close()
+    time.sleep(1.0)  # the drive has only just mounted; let it settle
+
+
+__all__ = ["TVApp", "run_from_config", "wait_for_media"]

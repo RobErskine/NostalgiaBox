@@ -26,6 +26,7 @@ sudo apt-get install -y \
   mpv libmpv2 \
   ffmpeg \
   cec-utils \
+  exfatprogs \
   python3 python3-pip python3-venv \
   python3-evdev
 
@@ -72,11 +73,13 @@ cat <<EOF
 ==> Done!
 
 Next steps:
-  1. Edit ${REPO_DIR}/config.yaml so the channels point at your show folders.
-  2. Copy your episodes onto the SD card (e.g. under /media/nostalgiabox/<show>/).
-  3. Test it:   nostalgiabox --check
-                nostalgiabox                 # starts the TV
-  4. Auto-start on boot:   ./scripts/install.sh --service
+  1. Put your library and its config.yaml on the media drive (see README),
+     plug the drive into the Pi.
+  2. Turn the Pi into an appliance - boot to TV, mount the drive by label,
+     re-scan whenever it's plugged back in:
+         ./scripts/install-service.sh
+  3. Check what it found:
+         nostalgiabox --check --config /media/nostalgiabox/config.yaml
 
 Enjoy your nostalgia box!
 EOF

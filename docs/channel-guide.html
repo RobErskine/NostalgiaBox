@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Time Warp TV - Channel Guide</title>
+<!--
+  Printable one-page channel guide. Open in a browser and print (US Letter,
+  margins "Default", scale 100%, "Background graphics" on).
+  Counts and hours come from <drive>/library-summary.txt (build-library.sh).
+-->
+<style>
+  @font-face {
+    font-family: "VT323";
+    src: url("../nostalgiabox/assets/fonts/VT323-Regular.ttf") format("truetype");
+  }
+  @page { size: 8.5in 11in; margin: 0.4in; }
+
+  :root {
+    --ink: #1c2a1e;
+    --muted: #4f5f52;
+    --green: #123B18;
+    --phosphor: #4DFF5A;
+    --line: #c9d3ca;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body {
+    margin: 0 auto;
+    width: 7.7in;
+    color: var(--ink);
+    font: 9.5pt/1.35 -apple-system, "Helvetica Neue", Arial, sans-serif;
+  }
+  @media screen { body { padding: 0.4in 0; } }
+
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.25in;
+    background: var(--green);
+    color: var(--phosphor);
+    border-radius: 10px;
+    padding: 0.14in 0.25in;
+  }
+  header h1 {
+    margin: 0;
+    font: 44pt/0.9 "VT323", monospace;
+    letter-spacing: 1px;
+  }
+  header h1 small { display: block; font-size: 20pt; opacity: 0.85; }
+  .totals { text-align: right; font: 17pt/1.05 "VT323", monospace; }
+  .totals b { font-size: 30pt; font-weight: normal; }
+
+  .intro {
+    margin: 0.13in 0 0.12in;
+    font-size: 10pt;
+    color: var(--muted);
+    text-align: center;
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.12in;
+  }
+  .ch {
+    border: 1.5px solid var(--line);
+    border-radius: 10px;
+    padding: 0.1in 0.12in 0.09in;
+    display: flex;
+    flex-direction: column;
+    break-inside: avoid;
+  }
+  .ch.locked { border-style: dashed; border-color: #9aa79c; background: #f4f6f4; }
+  .top { display: flex; align-items: center; gap: 0.09in; margin-bottom: 0.05in; }
+  .num {
+    flex: none;
+    width: 0.5in;
+    height: 0.4in;
+    border-radius: 6px;
+    background: var(--green);
+    color: var(--phosphor);
+    font: 24pt/0.4in "VT323", monospace;
+    text-align: center;
+  }
+  .locked .num { background: #5d6a60; color: #e7ece8; }
+  h2 { margin: 0; font-size: 12.5pt; line-height: 1.1; }
+  h2 span { display: block; font-size: 8pt; font-weight: 600; color: var(--muted); letter-spacing: 0.4px; text-transform: uppercase; }
+  .what { margin: 0 0 0.05in; }
+  .eg { margin: 0 0 0.07in; color: var(--muted); font-size: 8.8pt; }
+  .stats {
+    margin-top: auto;
+    display: flex;
+    justify-content: space-between;
+    border-top: 1px solid var(--line);
+    padding-top: 0.05in;
+    font: 15pt/1 "VT323", monospace;
+    color: var(--green);
+  }
+  .locked .stats { color: #3f4a41; }
+
+  footer {
+    margin-top: 0.12in;
+    display: flex;
+    justify-content: space-between;
+    gap: 0.3in;
+    font-size: 8.8pt;
+    color: var(--muted);
+  }
+  footer b { color: var(--ink); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>TIME WARP TV<small>CHANNEL GUIDE</small></h1>
+  <div class="totals"><b>1,000+</b> HOURS<br>2,800+ EPISODES &amp; MOVIES</div>
+</header>
+
+<p class="intro">Just like real TV: every channel is always on. Flip around, land on something, and watch.
+  Channels go up by age &mdash; the higher the number, the older the audience.</p>
+
+<main class="grid">
+
+  <section class="ch">
+    <div class="top"><div class="num">2</div><h2>Playhouse<span>Little ones</span></h2></div>
+    <p class="what">Gentle songs, sing-alongs and friendly faces for the youngest viewers.</p>
+    <p class="eg">Bear in the Big Blue House, The Wiggles, Winnie the Pooh, Wee Sing, Raffi</p>
+    <div class="stats"><span>60+ episodes</span><span>25+ hrs</span></div>
+  </section>
+
+  <section class="ch">
+    <div class="top"><div class="num">3</div><h2>Discovery<span>Learn something</span></h2></div>
+    <p class="what">Science, nature and how the world works &mdash; shows that teach while they entertain.</p>
+    <p class="eg">Bill Nye the Science Guy, The Magic School Bus, Wild Kratts</p>
+    <div class="stats"><span>170+ episodes</span><span>70+ hrs</span></div>
+  </section>
+
+  <section class="ch">
+    <div class="top"><div class="num">4</div><h2>Toon Classics<span>Pure cartoon chaos</span></h2></div>
+    <p class="what">Old-school gags and slapstick. No story to follow &mdash; jump in any time.</p>
+    <p class="eg">Road Runner &amp; Wile E. Coyote, Animaniacs</p>
+    <div class="stats"><span>150 cartoons</span><span>40+ hrs</span></div>
+  </section>
+
+  <section class="ch">
+    <div class="top"><div class="num">5</div><h2>Kids<span>Comedy</span></h2></div>
+    <p class="what">The funniest cartoons of the '90s and 2000s: school, friends, family and weird neighbors.</p>
+    <p class="eg">Hey Arnold!, The Fairly OddParents, Ed, Edd n Eddy, Courage the Cowardly Dog, Codename: Kids Next Door, Rocket Power, Danny Phantom, Darkwing Duck</p>
+    <div class="stats"><span>880+ episodes</span><span>300+ hrs</span></div>
+  </section>
+
+  <section class="ch">
+    <div class="top"><div class="num">6</div><h2>Action<span>Heroes &amp; villains</span></h2></div>
+    <p class="what">Superheroes, samurai and big adventures, with story arcs and real bad guys.</p>
+    <p class="eg">Batman: The Animated Series, Batman Beyond, Justice League, Avatar: The Last Airbender, Samurai Jack, Static Shock, Jackie Chan Adventures</p>
+    <div class="stats"><span>880+ episodes</span><span>300+ hrs</span></div>
+  </section>
+
+  <section class="ch">
+    <div class="top"><div class="num">7</div><h2>Movie Night<span>Family movies</span></h2></div>
+    <p class="what">Movies made for kids. Picks up right where you left off.</p>
+    <p class="eg">Finding Nemo, Space Jam, Sonic the Hedgehog 1&ndash;3, The Muppets, Night at the Museum, Scooby-Doo, Elf</p>
+    <div class="stats"><span>30+ movies</span><span>50+ hrs</span></div>
+  </section>
+
+  <section class="ch">
+    <div class="top"><div class="num">8</div><h2>Big Movies<span>Blockbusters</span></h2></div>
+    <p class="what">The big adventures (PG &amp; PG-13). Longer and more intense &mdash; great to watch together.</p>
+    <p class="eg">Back to the Future, The Lord of the Rings, Pirates of the Caribbean, Transformers, Indiana Jones, Men in Black</p>
+    <div class="stats"><span>30+ movies</span><span>75+ hrs</span></div>
+  </section>
+
+  <section class="ch locked">
+    <div class="top"><div class="num">9</div><h2>Adult Swim 🔒<span>Grown-ups only</span></h2></div>
+    <p class="what">Late-night cartoons for grown-ups. Needs a code to unlock.</p>
+    <p class="eg">Space Ghost Coast to Coast, Aqua Teen Hunger Force, Sealab 2021, Cowboy Bebop</p>
+    <div class="stats"><span>570+ episodes</span><span>125+ hrs</span></div>
+  </section>
+
+  <section class="ch locked">
+    <div class="top"><div class="num">10</div><h2>Movies 🔒<span>Grown-ups only</span></h2></div>
+    <p class="what">R-rated movies for after bedtime. Needs a code to unlock.</p>
+    <p class="eg">Gladiator, Tombstone, Donnie Darko, Children of Men</p>
+    <div class="stats"><span>10+ movies</span><span>20+ hrs</span></div>
+  </section>
+
+</main>
+
+<footer>
+  <span><b>Locked channels:</b> ask a grown-up for the code. They lock again when the TV turns off.</span>
+  <span><b>Movie channels</b> remember where you stopped.</span>
+</footer>
+
+</body>
+</html>

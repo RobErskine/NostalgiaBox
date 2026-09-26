@@ -49,8 +49,10 @@ def test_volume_overlay_has_label_and_bars(tmp_path):
     om.show_volume(45, muted=False)
     ass = player.overlays[2]
     assert "Volume" in ass
-    # 20 segments: some drawn as bars (rectangles start "m 0 0 l"), rest as dots.
-    assert ass.count("\\p1") == 20
+    # 20 segments: some drawn as bars (rectangles start "m 0 0 l"), rest as dots
+    # (circles of radius 6). Counted by shape, not by \p1 drawings, because the
+    # corner logo rides along on this overlay and draws its own.
+    assert ass.count("m 0 0 l") + ass.count("m 0 -6 b") == 20
 
 
 def test_volume_bars_scale_with_level(tmp_path):
@@ -122,3 +124,142 @@ def test_overlay_uses_configured_font_and_color(tmp_path):
     ass = player.overlays[1]
     assert "\\fnVT323" in ass          # bundled retro font
     assert "&H005AFF4D" in ass         # #4DFF5A -> ASS BBGGRR
+
+
+# -- corner logo ------------------------------------------------------------
+# The mark rides along on the banner and the volume overlay rather than owning
+# an overlay slot of its own, so it appears and expires with them.
+
+
+def _ui_with_logo(on):
+    from nostalgiabox.config import UiConfig
+
+    return UiConfig(logo=on)
+
+
+def test_logo_rides_on_the_channel_banner():
+    from nostalgiabox.overlay import _channel_bug_ass
+
+    with_logo = _channel_bug_ass(4, "Kids", _ui_with_logo(True))
+    without = _channel_bug_ass(4, "Kids", _ui_with_logo(False))
+
+    assert with_logo.endswith(_logo_lines(True))
+    assert "\\p1" not in without          # no drawings at all when off
+    assert len(with_logo) > len(without)
+
+
+def test_logo_rides_on_the_volume_bar():
+    from nostalgiabox.overlay import _volume_ass
+
+    with_logo = _volume_ass(45, False, _ui_with_logo(True))
+    without = _volume_ass(45, False, _ui_with_logo(False))
+
+    assert with_logo.endswith(_logo_lines(True))
+    # The bar itself is unchanged: same 20 segments either way.
+    for ass in (with_logo, without):
+        assert ass.count("m 0 0 l") + ass.count("m 0 -6 b") == 20
+
+
+def _logo_lines(on):
+    from nostalgiabox.overlay import _logo_ass
+
+    return _logo_ass(_ui_with_logo(on))
+
+
+def test_logo_has_two_portals_and_three_letters():
+    ass = _logo_lines(True)
+    lines = ass.split("\n")
+
+    assert len(lines) == 5
+    assert sum(1 for line in lines if "\\p1" in line) == 2      # portal rings
+    assert [line[-1] for line in lines[2:]] == ["T", "T", "W"]
+
+
+def test_logo_sits_clear_of_the_volume_bar():
+    """The mark must not overlap the bar it shares the bottom of the screen with."""
+    from nostalgiabox.overlay import _BAR_ROW_TOP, _LOGO_CY, _PORTAL_RY
+
+    assert _LOGO_CY + _PORTAL_RY < _BAR_ROW_TOP
+
+
+def test_logo_stays_inside_the_safe_area():
+    from nostalgiabox.overlay import _IX1, _LOGO_RIGHT
+
+    assert _LOGO_RIGHT <= _IX1
+
+
+# -- welcome / channel-guide card -------------------------------------------
+# Rendered once into channel 1's episode by nostalgiabox.guide_gen, so a
+# mistake here ships as a wrong picture on the TV rather than a crash.
+
+
+class _Ch:
+    def __init__(self, number, name, passcode=None):
+        self.number = number
+        self.name = name
+        self.passcode = passcode
+
+
+def test_guide_lists_every_channel():
+    from nostalgiabox.config import UiConfig
+    from nostalgiabox.overlay import guide_ass
+
+    channels = [_Ch(1, "Guide"), _Ch(2, "Playhouse"), _Ch(10, "Movies")]
+    ass = guide_ass(channels, UiConfig())
+
+    for text in ("01", "Guide", "02", "Playhouse", "10", "Movies"):
+        assert text in ass
+
+
+def test_guide_marks_only_locked_channels():
+    from nostalgiabox.config import UiConfig
+    from nostalgiabox.overlay import guide_ass
+
+    ass = guide_ass(
+        [_Ch(2, "Playhouse"), _Ch(9, "Adult Swim", passcode="1997")], UiConfig()
+    )
+
+    assert ass.count("LOCKED") == 1
+
+
+def test_guide_uses_the_brand_name():
+    from nostalgiabox.config import UiConfig
+    from nostalgiabox.overlay import guide_ass
+
+    assert "TIME WARP TV" in guide_ass([_Ch(1, "Guide")], UiConfig())
+    assert "KID TV" in guide_ass([_Ch(1, "Guide")], UiConfig(brand="KID TV"))
+
+
+def test_guide_rows_stay_inside_the_safe_area():
+    """A long line-up must shrink to fit, not run off the bottom of the screen."""
+    import re
+
+    from nostalgiabox.config import UiConfig
+    from nostalgiabox.overlay import _GUIDE_ROWS_BOTTOM, guide_ass
+
+    channels = [_Ch(n, f"Channel {n}") for n in range(1, 21)]
+    ass = guide_ass(channels, UiConfig())
+
+    # Two header lines sit above the rows; the footer deliberately sits below
+    # _GUIDE_ROWS_BOTTOM, so check the rows themselves.
+    ys = sorted(int(m) for m in re.findall(r"\\pos\(\d+,(\d+)\)", ass))
+    row_ys = ys[2 : 2 + len(channels)]
+    assert max(row_ys) <= _GUIDE_ROWS_BOTTOM
+
+
+def test_guide_hint_becomes_one_multi_line_block():
+    from nostalgiabox.config import UiConfig
+    from nostalgiabox.overlay import guide_ass
+
+    ass = guide_ass([_Ch(1, "Guide")], UiConfig(), hint="first\nsecond")
+
+    assert r"first\Nsecond" in ass
+
+
+def test_guide_escapes_channel_names():
+    from nostalgiabox.config import UiConfig
+    from nostalgiabox.overlay import guide_ass
+
+    ass = guide_ass([_Ch(1, "Odd {name}")], UiConfig())
+
+    assert "Odd (name)" in ass

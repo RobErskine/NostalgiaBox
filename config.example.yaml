@@ -26,9 +26,24 @@
 # OPTION B (explicit): list channels yourself for full control of numbers/names.
 # -----------------------------------------------------------------------------
 channels:
+  # A "welcome" channel, like the one a hotel TV boots onto: a still card
+  # listing what is on every other channel. It is an ordinary channel holding
+  # one very boring episode, which you generate from this very config with:
+  #
+  #   python -m nostalgiabox.guide_gen --config config.yaml \
+  #       --out /media/nostalgiabox/01-guide/welcome.mp4
+  #
+  # Re-run it whenever you add or rename a channel. Pair it with
+  # home_channel: 1 above so the remote's HOME button comes back here.
+  - number: 1
+    name: "Guide"
+    path: /media/nostalgiabox/01-guide
+    breaks: false       # never interrupt the guide with a break clip
+    start_offset: 0     # always from the top; it is a still picture anyway
   - number: 2
     name: "Dragon Tales"
     path: /media/nostalgiabox/dragon-tales
+    breaks: false   # no break blocks on this channel, regardless of the global setting
   - number: 3
     name: "Arthur"
     path: /media/nostalgiabox/arthur
@@ -51,6 +66,23 @@ channels:
   - number: 8
     name: "Mister Rogers' Neighborhood"
     path: /media/nostalgiabox/mister-rogers
+  - number: 9
+    name: "Adult Swim"
+    path: /media/nostalgiabox/adult-swim
+    # Gate a channel behind a 4-digit-style code (digits only, 1-8 chars) -
+    # this is a kid gate, not real security; the code is stored in plain text.
+    # It stays unlocked for the rest of the session; standby/power-off re-locks
+    # every gated channel automatically.
+    passcode: "1997"
+    locked_message: "ADULT SWIM - LIVE AT 9PM"
+  - number: 10
+    name: "Movies"
+    path: /media/nostalgiabox/movies
+    # Per-channel overrides of the global `tune_in` / `start_offset` below -
+    # handy for a movie channel: pick up where you left off, and start at 0:00
+    # instead of a few seconds in.
+    tune_in: resume
+    start_offset: 0
 
 # -----------------------------------------------------------------------------
 # How a channel behaves when you tune into it.
@@ -64,6 +96,28 @@ channels:
 tune_in: random
 
 start_channel: 2          # which channel the box powers on to
+# Where the remote's HOME button goes. Leave it out and HOME uses start_channel.
+# Point both at a "welcome" channel (see the guide channel below) to get the
+# hotel-TV behaviour: the box boots onto a card listing what's on, and HOME
+# brings a lost viewer straight back to it.
+# home_channel: 1
+
+# Where "resume" tune-in positions are saved, so they survive a power cut (not
+# just a channel change). Point it at the media drive so it works even if the
+# SD card is read-only (see the kid-proofing section of the README).
+# state_file: /media/nostalgiabox/.nostalgiabox-state.json
+
+# -----------------------------------------------------------------------------
+# Between-episode break blocks: old commercials, or your own bathroom/snack/
+# stretch break cards - just video files in a folder. Fires only when an
+# episode reaches a natural end, never mid-episode. Turn it off for a specific
+# channel with `breaks: false` on that channel (see the baby channel above).
+# -----------------------------------------------------------------------------
+# breaks:
+#   path: /media/nostalgiabox/breaks
+#   every: 2        # a break block after every 2 episodes
+#   count: [1, 2]   # 1-2 clips per block (a single number is also fine)
+# (channel 2 below sets `breaks: false` to opt out even when this is on)
 
 # --- The "feel" of the TV ----------------------------------------------------
 # Shows keep their own aspect ratio (4:3 is pillar-boxed, 16:9 fills the screen)
@@ -94,17 +148,29 @@ ui:
   color: "#4DFF5A"        # phosphor green for CH banner, volume bar, messages
   dim_color: "#123B18"    # (reserved) colour for unlit elements
   glow: true              # soft CRT-style glow around the text
+  logo: true              # "TWT" corner mark on the banner and the volume bar
+                          #   (a placeholder - see _logo_ass in overlay.py)
+  brand: "TIME WARP TV"   # station name, shown on the welcome channel's card
 
 # --- CRT picture effect (for 4:3 shows on a flat TV) -------------------------
 # Bends the picture like a tube TV: a gentle bulge, rounded corners, a vignette
 # and faint scanlines. Set enabled:false if your Pi struggles or you dislike it.
 crt:
   enabled: true
-  curvature: 0.12         # 0 = flat, ~0.2 = strongly bulged
-  corner_radius: 0.065    # how rounded the corners are
-  vignette: 0.25          # edge darkening (0-1)
+  # The effect switches itself OFF for anything taller than max_height and
+  # back on afterwards, so a modern HD film is not watched through a tube. 720
+  # keeps it for period TV (including 720p kids' shows) and drops it for 1080p
+  # features. Set 0 to always keep it on, whatever is playing.
+  max_height: 720
+  # These are the default, gentle numbers: the tube shape and the scanlines
+  # read clearly, but they stay out of the picture's way. For the heavy look,
+  # roughly double them (0.12 / 0.065 / 0.25 / 0.12); halve them again for a
+  # barely-there hint of a tube.
+  curvature: 0.045        # 0 = flat, ~0.2 = strongly bulged
+  corner_radius: 0.032    # how rounded the corners are
+  vignette: 0.11          # edge darkening (0-1)
   scanlines: true
-  scanline_intensity: 0.12
+  scanline_intensity: 0.045
 
 # --- Audio -------------------------------------------------------------------
 initial_volume: 70        # 0-100
@@ -123,6 +189,17 @@ scan_recursive: true      # also look inside season sub-folders for episodes
 # video_extensions: [".mp4", ".mkv", ".avi", ".m4v"]   # override if needed
 # shuffle_seed: 1234       # set for a repeatable shuffle order (mostly for tests)
 
+# fullscreen: false        # run mpv in a window (handy on a dev machine; use
+                           #   `nostalgiabox --windowed` instead of editing this)
+# hwdec: "no"              # disable hardware decode - a fallback if playback
+                           #   stutters on a weaker GPU (e.g. a Raspberry Pi 3)
+
+# Which player to drive. "auto" (default) uses libmpv on Linux/the Pi, and
+# drives the mpv binary over a JSON IPC socket on macOS - where libmpv cannot
+# open a window from a plain Python process (you get audio but no picture).
+# Force one with "libmpv" or "ipc" if you need to.
+# player_backend: auto
+
 # --- Remote control input ----------------------------------------------------
 # All backends are auto-detected; anything unavailable is skipped, so these are
 # only needed to turn things off or fine-tune device selection.
@@ -136,8 +213,8 @@ input:
 
   # Map specific keys to actions (handy for odd remotes). Find a button's key
   # name with `sudo evtest`. Actions: channel_up, channel_down, volume_up,
-  # volume_down, mute, enter, info, last_channel, power, quit, digit_0..digit_9,
-  # or none (to unbind). Example for a Logitech R400 presenter. NOTE: its
+  # volume_down, mute, enter, info, last_channel, home, next_episode,
+  # previous_episode, power, quit, digit_0..digit_9, or none (to unbind). Example for a Logitech R400 presenter. NOTE: its
   # play-screen button sends Escape (the quit key!), so remap KEY_ESC too or it
   # will shut the box off.
   # key_overrides:

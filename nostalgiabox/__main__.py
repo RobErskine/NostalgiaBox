@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import List, Optional
 
@@ -56,7 +57,16 @@ def _cmd_check(config: Config) -> int:
         count = len(channel.episodes)
         total += count
         flag = "" if count else "   <-- NO EPISODES FOUND"
-        print(f"  CH {channel.number:>3}  {channel.name:<28} {count:>4} episodes{flag}")
+        tags = []
+        if channel.config.passcode is not None:
+            tags.append("locked")
+        if channel.tune_in_mode == "resume":
+            tags.append("resume")
+        if channel.break_info is not None:
+            n_clips, every = channel.break_info
+            tags.append(f"breaks: {n_clips} clips every {every}")
+        suffix = f"  ({', '.join(tags)})" if tags else ""
+        print(f"  CH {channel.number:>3}  {channel.name:<28} {count:>4} episodes{flag}{suffix}")
     print(f"total episodes: {total}")
     return 0 if total > 0 else 1
 
@@ -97,6 +107,18 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="run without real hardware (mock player + keyboard/stdin control)",
     )
     parser.add_argument(
+        "--windowed",
+        action="store_true",
+        help="run mpv in a window instead of fullscreen (handy on a dev machine)",
+    )
+    parser.add_argument(
+        "--hotplug",
+        action="store_true",
+        help="appliance mode: wait for the media drive (and its config) if it is "
+        "missing, and exit so the service restarts with a fresh scan whenever the "
+        "drive is unplugged or its config is edited",
+    )
+    parser.add_argument(
         "--check",
         action="store_true",
         help="validate the config, list channels/episodes, and exit",
@@ -134,6 +156,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.list_audio:
         return _list_audio_devices()
 
+    if args.hotplug and args.config and not args.check:
+        from .app import wait_for_media
+
+        wait_for_media(
+            Path(args.config).expanduser(),
+            fullscreen=not args.windowed,
+            dry_run=args.dry_run,
+        )
+
     try:
         config_path = _find_config(args.config)
         log.info("loading config: %s", config_path)
@@ -142,13 +173,21 @@ def main(argv: Optional[List[str]] = None) -> int:
         log.error("%s", exc)
         return 2
 
+    if args.windowed:
+        config = replace(config, fullscreen=False)
+
     if args.check:
         return _cmd_check(config)
 
     from .app import run_from_config
 
     try:
-        run_from_config(config, dry_run=args.dry_run)
+        run_from_config(
+            config,
+            dry_run=args.dry_run,
+            config_path=config_path,
+            hotplug=args.hotplug,
+        )
     except RuntimeError as exc:
         log.error("%s", exc)
         return 1

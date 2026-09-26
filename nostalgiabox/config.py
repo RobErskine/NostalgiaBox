@@ -42,6 +42,14 @@ TUNE_IN_MODES = ("random", "resume", "broadcast")
 #   none   - cut straight to the next channel
 TRANSITION_EFFECTS = ("glitch", "static", "none")
 
+# Which real video player backend to use.
+#   auto   - libmpv, except on macOS where libmpv cannot open its own window
+#            from a plain Python process (audio plays, no picture); there it
+#            drives the mpv binary over a JSON IPC socket instead.
+#   libmpv - always use libmpv (one process, needs python-mpv + libmpv)
+#   ipc    - always drive the mpv binary as a subprocess
+PLAYER_BACKENDS = ("auto", "libmpv", "ipc")
+
 
 @dataclass(frozen=True)
 class UiConfig:
@@ -51,18 +59,43 @@ class UiConfig:
     color: str = "#4DFF5A"          # bright CRT phosphor green
     dim_color: str = "#123B18"      # unlit volume segment / dot colour
     glow: bool = True               # soft glow around text for that CRT bloom
+    logo: bool = True               # corner mark on the channel banner / volume bar
+    brand: str = "TIME WARP TV"     # station name, shown on the welcome channel
 
 
 @dataclass(frozen=True)
 class CrtConfig:
     """The CRT picture effect applied to the 4:3 video via a GLSL shader."""
 
+    # Tuned to read as a tube TV without fighting the picture: the shape and
+    # the scanlines are there, but a kid can still see the corners of the show.
+    # Roughly double every number below for the heavy, unmistakable version.
     enabled: bool = True
-    curvature: float = 0.12         # barrel "bulge" amount (0 = perfectly flat)
-    corner_radius: float = 0.065    # rounded-corner size (fraction of screen)
-    vignette: float = 0.25          # darkening toward the edges
+    # The effect sells "old show on a tube TV", which is wrong for a modern HD
+    # film - and it costs GPU time exactly where a Pi has least to spare. Above
+    # this source height the shader is switched off for that item and back on
+    # afterwards. 0 disables the rule (always on). 720 keeps it for period TV,
+    # including 720p kids' shows, and drops it for 1080p features.
+    max_height: int = 720
+    curvature: float = 0.045        # barrel "bulge" amount (0 = perfectly flat)
+    corner_radius: float = 0.032    # rounded-corner size (fraction of screen)
+    vignette: float = 0.11          # darkening toward the edges
     scanlines: bool = True
-    scanline_intensity: float = 0.12
+    scanline_intensity: float = 0.045
+
+
+@dataclass(frozen=True)
+class BreaksConfig:
+    """Between-episode break clips: old commercials, or bathroom/snack/stretch cards.
+
+    Fired only when an episode reaches a natural end - never mid-episode. See
+    docs/decisions/0004-breaks-between-episodes-only.md.
+    """
+
+    path: Optional[Path] = None
+    every: int = 1              # a break block after every N episodes
+    count_min: int = 1          # clips per break block
+    count_max: int = 1
 
 
 @dataclass(frozen=True)
@@ -78,6 +111,19 @@ class ChannelConfig:
     # a set of season numbers detected from the path (e.g. S06E01, "Season 6").
     exclude: tuple[str, ...] = ()
     exclude_seasons: frozenset[int] = frozenset()
+    # A 4-digit-style passcode gate (see docs/decisions/0001). None = unlocked
+    # channel, reachable by anyone. Digits only, 1-8 chars.
+    passcode: Optional[str] = None
+    locked_message: Optional[str] = None
+    # Per-channel override of the global `tune_in` mode / start_offset. None
+    # means "use the global setting".
+    tune_in: Optional[str] = None
+    start_offset: Optional[tuple[float, float]] = None
+    # Per-channel break-block override: a BreaksConfig overrides the global
+    # one entirely; breaks_disabled=True turns breaks off for this channel
+    # regardless of the global setting (`breaks: false` in YAML).
+    breaks: Optional[BreaksConfig] = None
+    breaks_disabled: bool = False
 
     def __post_init__(self) -> None:
         if self.number < 0:
@@ -94,6 +140,10 @@ class Config:
     video_extensions: tuple[str, ...] = DEFAULT_VIDEO_EXTENSIONS
     tune_in: str = "random"
     start_channel: Optional[int] = None
+    # Where the remote's HOME button goes (the welcome screen / channel guide).
+    # None = use start_channel, so a box that boots onto the guide needs no
+    # extra setting.
+    home_channel: Optional[int] = None
 
     # Presentation / "feel" of the TV.
     force_4_3: bool = False                # if true, letterbox everything to 4:3;
@@ -112,6 +162,24 @@ class Config:
     osd_duration: float = 2.0             # how long volume/message overlays linger
     ui: UiConfig = field(default_factory=UiConfig)
     crt: CrtConfig = field(default_factory=CrtConfig)
+
+    # Window / decode (mainly useful on a desktop dev machine, or to work
+    # around a weak GPU on a Raspberry Pi 3 - see Part H/Pi-3 notes in the
+    # README).
+    fullscreen: bool = True
+    hwdec: str = "auto-safe"
+    # Which real player to drive: "auto" picks the subprocess/IPC mpv backend on
+    # macOS (libmpv cannot open a window from a plain Python process there) and
+    # libmpv everywhere else. Force one with "libmpv" or "ipc".
+    player_backend: str = "auto"
+
+    # Between-episode break blocks (old commercials / bathroom-snack-stretch
+    # cards). None = no breaks anywhere unless a channel sets its own.
+    breaks: Optional[BreaksConfig] = None
+
+    # Where "resume" tune-in state is persisted so it survives a power cut.
+    # None = resume only lasts for the current process (in-memory).
+    state_file: Optional[Path] = None
 
     # Audio.
     initial_volume: int = 70              # 0-100
@@ -186,7 +254,12 @@ def _prettify_name(folder_name: str) -> str:
     return cleaned.title() if cleaned.islower() else cleaned
 
 
-def _parse_channels(raw: Any, base: Optional[Path], default_shuffle: bool) -> List[ChannelConfig]:
+def _parse_channels(
+    raw: Any,
+    base: Optional[Path],
+    default_shuffle: bool,
+    global_breaks: Optional[BreaksConfig],
+) -> List[ChannelConfig]:
     if not isinstance(raw, list):
         raise ConfigError("'channels' must be a list")
     channels: List[ChannelConfig] = []
@@ -197,6 +270,32 @@ def _parse_channels(raw: Any, base: Optional[Path], default_shuffle: bool) -> Li
             raise ConfigError(f"channel #{i} is missing required key 'path'")
         number = entry.get("number", i + 2)  # old TVs often started around ch. 2
         name = entry.get("name") or _prettify_name(Path(str(entry["path"])).name)
+
+        ch_tune_in: Optional[str] = None
+        if entry.get("tune_in") is not None:
+            ch_tune_in = str(entry["tune_in"]).lower()
+            if ch_tune_in not in TUNE_IN_MODES:
+                raise ConfigError(
+                    f"channel #{i} 'tune_in' must be one of {TUNE_IN_MODES}, got '{entry['tune_in']}'"
+                )
+
+        has_offset_keys = any(
+            k in entry for k in ("start_offset", "start_offset_min", "start_offset_max")
+        )
+        ch_start_offset = _offset_range(entry) if has_offset_keys else None
+
+        breaks_raw = entry.get("breaks")
+        breaks_disabled = breaks_raw is False
+        ch_breaks = (
+            _parse_breaks(breaks_raw, base, default=global_breaks)
+            if isinstance(breaks_raw, dict)
+            else None
+        )
+        if breaks_raw is not None and breaks_raw is not False and not isinstance(breaks_raw, dict):
+            raise ConfigError(f"channel #{i} 'breaks' must be a mapping or 'false'")
+
+        locked_message = entry.get("locked_message")
+
         channels.append(
             ChannelConfig(
                 number=int(number),
@@ -205,9 +304,50 @@ def _parse_channels(raw: Any, base: Optional[Path], default_shuffle: bool) -> Li
                 shuffle=bool(entry.get("shuffle", default_shuffle)),
                 exclude=_parse_str_list(entry.get("exclude"), "exclude"),
                 exclude_seasons=_parse_seasons(entry.get("exclude_seasons")),
+                passcode=_parse_passcode(entry.get("passcode"), i),
+                locked_message=str(locked_message) if locked_message else None,
+                tune_in=ch_tune_in,
+                start_offset=ch_start_offset,
+                breaks=ch_breaks,
+                breaks_disabled=breaks_disabled,
             )
         )
     return channels
+
+
+def _parse_passcode(raw: Any, index: int) -> Optional[str]:
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    if not s.isdigit() or not (1 <= len(s) <= 8):
+        raise ConfigError(f"channel #{index} 'passcode' must be 1-8 digits, got '{raw}'")
+    return s
+
+
+def _parse_breaks(
+    raw: Any, base: Optional[Path], *, default: Optional[BreaksConfig] = None
+) -> Optional[BreaksConfig]:
+    if raw is None or raw is False:
+        return None
+    if not isinstance(raw, dict):
+        raise ConfigError("'breaks' must be a mapping")
+    base_cfg = default or BreaksConfig()
+
+    path_raw = raw.get("path")
+    path = _as_path(path_raw, base) if path_raw else base_cfg.path
+
+    every = _clamp_int(raw.get("every", base_cfg.every), 1, 1000, "breaks.every")
+
+    count_raw = raw.get("count", [base_cfg.count_min, base_cfg.count_max])
+    if isinstance(count_raw, (list, tuple)):
+        if not count_raw:
+            raise ConfigError("'breaks.count' list cannot be empty")
+        cmin = _clamp_int(count_raw[0], 1, 20, "breaks.count")
+        cmax = _clamp_int(count_raw[1] if len(count_raw) > 1 else count_raw[0], 1, 20, "breaks.count")
+    else:
+        cmin = cmax = _clamp_int(count_raw, 1, 20, "breaks.count")
+
+    return BreaksConfig(path=path, every=every, count_min=cmin, count_max=max(cmin, cmax))
 
 
 def _parse_str_list(raw: Any, name: str) -> tuple[str, ...]:
@@ -266,8 +406,15 @@ def config_from_dict(data: Dict[str, Any], *, base_dir: Optional[Path] = None) -
     media_root_raw = data.get("media_root")
     media_root = _as_path(media_root_raw, base_dir) if media_root_raw else None
 
+    breaks_raw = data.get("breaks")
+    if breaks_raw is not None and breaks_raw is not False and not isinstance(breaks_raw, dict):
+        raise ConfigError("'breaks' must be a mapping or 'false'")
+    global_breaks = _parse_breaks(breaks_raw, media_root or base_dir)
+
     if "channels" in data:
-        channels = _parse_channels(data["channels"], media_root or base_dir, default_shuffle)
+        channels = _parse_channels(
+            data["channels"], media_root or base_dir, default_shuffle, global_breaks
+        )
     elif media_root is not None:
         channels = _discover_channels(
             media_root,
@@ -292,6 +439,9 @@ def config_from_dict(data: Dict[str, Any], *, base_dir: Optional[Path] = None) -
     start_channel = data.get("start_channel")
     start_channel = int(start_channel) if start_channel is not None else None
 
+    home_channel = data.get("home_channel")
+    home_channel = int(home_channel) if home_channel is not None else None
+
     initial_volume = _clamp_int(data.get("initial_volume", 70), 0, 100, "initial_volume")
     volume_step = _clamp_int(data.get("volume_step", 5), 1, 100, "volume_step")
     audio_device = data.get("audio_device")
@@ -305,11 +455,15 @@ def config_from_dict(data: Dict[str, Any], *, base_dir: Optional[Path] = None) -
     else:
         raise ConfigError("'power_off_command' must be a string or list of strings")
 
+    state_file_raw = data.get("state_file")
+    state_file = _as_path(state_file_raw, base_dir) if state_file_raw else None
+
     return Config(
         channels=channels,
         video_extensions=extensions,
         tune_in=tune_in,
         start_channel=start_channel,
+        home_channel=home_channel,
         force_4_3=bool(data.get("force_4_3", False)),
         start_offset_min=_offset_range(data)[0],
         start_offset_max=_offset_range(data)[1],
@@ -320,6 +474,11 @@ def config_from_dict(data: Dict[str, Any], *, base_dir: Optional[Path] = None) -
         osd_duration=_clamp_float(data.get("osd_duration", 2.0), 0.0, 60.0, "osd_duration"),
         ui=_parse_ui(data.get("ui")),
         crt=_parse_crt(data.get("crt")),
+        fullscreen=bool(data.get("fullscreen", True)),
+        hwdec=str(data.get("hwdec", "auto-safe")),
+        player_backend=_valid_player_backend(data.get("player_backend", "auto")),
+        breaks=global_breaks,
+        state_file=state_file,
         initial_volume=initial_volume,
         volume_step=volume_step,
         audio_device=audio_device,
@@ -359,6 +518,8 @@ def _parse_ui(raw: Any) -> UiConfig:
         color=_valid_color(raw.get("color", defaults.color), "ui.color"),
         dim_color=_valid_color(raw.get("dim_color", defaults.dim_color), "ui.dim_color"),
         glow=bool(raw.get("glow", defaults.glow)),
+        logo=bool(raw.get("logo", defaults.logo)),
+        brand=str(raw.get("brand", defaults.brand)),
     )
 
 
@@ -370,6 +531,7 @@ def _parse_crt(raw: Any) -> CrtConfig:
     d = CrtConfig()
     return CrtConfig(
         enabled=bool(raw.get("enabled", d.enabled)),
+        max_height=_clamp_int(raw.get("max_height", d.max_height), 0, 4320, "crt.max_height"),
         curvature=_clamp_float(raw.get("curvature", d.curvature), 0.0, 0.5, "crt.curvature"),
         corner_radius=_clamp_float(raw.get("corner_radius", d.corner_radius), 0.0, 0.3, "crt.corner_radius"),
         vignette=_clamp_float(raw.get("vignette", d.vignette), 0.0, 1.0, "crt.vignette"),
@@ -399,6 +561,15 @@ def _offset_range(data: Dict[str, Any]) -> tuple[float, float]:
         else:
             lo = hi = _clamp_float(raw, 0.0, 3600.0, "start_offset")
     return (lo, max(lo, hi))
+
+
+def _valid_player_backend(value: Any) -> str:
+    s = str(value).strip().lower()
+    if s not in PLAYER_BACKENDS:
+        raise ConfigError(
+            f"'player_backend' must be one of {PLAYER_BACKENDS}, got '{value}'"
+        )
+    return s
 
 
 def _valid_transition(value: Any) -> str:
@@ -450,10 +621,12 @@ __all__ = [
     "ChannelConfig",
     "UiConfig",
     "CrtConfig",
+    "BreaksConfig",
     "ConfigError",
     "load_config",
     "config_from_dict",
     "DEFAULT_VIDEO_EXTENSIONS",
     "TUNE_IN_MODES",
     "TRANSITION_EFFECTS",
+    "PLAYER_BACKENDS",
 ]

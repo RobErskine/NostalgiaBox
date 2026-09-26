@@ -6,6 +6,9 @@ answer two questions:
 * "I just tuned in - what should I play?" (:meth:`Channel.tune_in`)
 * "The episode ended - what's next?" (:meth:`Channel.advance`)
 
+and, for the remote's skip buttons, "give me another one" (:meth:`Channel.skip`)
+and "go back to the one before" (:meth:`Channel.back`).
+
 The answer depends on the configured ``tune_in`` mode (see ``config.py``):
 random, resume, or broadcast. :class:`ChannelLineup` holds all the channels and
 provides the up/down/by-number navigation a remote needs.
@@ -28,11 +31,15 @@ _SEASON_PATTERNS = (
     re.compile(r"\b(\d{1,2})x\d{1,3}\b"),                       # 6x01
 )
 
-from .config import ChannelConfig, Config
+from .config import BreaksConfig, ChannelConfig, Config
 from .playlist import ShuffleBag
 from .probe import DEFAULT_EPISODE_SECONDS, probe_duration
+from .state import load_state
 
 log = logging.getLogger(__name__)
+
+# How many episodes back the remote's "previous" button can reach, per channel.
+_HISTORY_LIMIT = 50
 
 
 @dataclass(frozen=True)
@@ -41,6 +48,12 @@ class PlayRequest:
 
     path: Path
     start: float = 0.0
+    # True for a between-episode break clip (commercial/bathroom/snack/stretch)
+    # - kept out of the resume position and the episode count.
+    is_break: bool = False
+    # True when this request is the viewer's remembered "resume" position, so
+    # the app can offer a "press OK to start over" banner.
+    resumed: bool = False
 
 
 def detect_season(text: str) -> Optional[int]:
@@ -160,6 +173,8 @@ class Channel:
         start_offset_min: float = 0.0,
         start_offset_max: Optional[float] = None,
         rng: Optional[random.Random] = None,
+        breaks: Optional[BreaksConfig] = None,
+        break_clips: Sequence[Path] = (),
     ) -> None:
         self.config = config
         self.episodes: List[Path] = list(episodes)
@@ -182,6 +197,23 @@ class Channel:
         self._resume_position: float = 0.0
         # Broadcast schedule (built lazily on first use in "broadcast" mode).
         self._broadcast: Optional[BroadcastSchedule] = None
+        # Passcode lock (see config.ChannelConfig.passcode /
+        # docs/decisions/0001-passcode-instead-of-time-gate.md).
+        self.locked: bool = config.passcode is not None
+        # Between-episode break blocks.
+        self._breaks = breaks
+        self._break_bag: Optional[ShuffleBag[Path]] = (
+            ShuffleBag(list(break_clips), self._rng) if break_clips else None
+        )
+        self._break_queue: List[PlayRequest] = []
+        self._episodes_since_break = 0
+        self._last_was_break = False
+        # Episodes this channel has shown, oldest first, for the remote's skip
+        # buttons. _cursor points at what is on now; "previous" steps it back
+        # and "next" steps it forward again before drawing anything new - the
+        # same back/forward behaviour as shuffle on a music player.
+        self._history: List[Path] = []
+        self._cursor = -1
 
     # -- identity -----------------------------------------------------------
     @property
@@ -200,44 +232,201 @@ class Channel:
         return f"<Channel {self.number} {self.name!r} ({len(self.episodes)} eps)>"
 
     # -- playback selection -------------------------------------------------
+    def _start_offset(self) -> float:
+        if self.start_offset_max > self.start_offset_min:
+            return self._rng.uniform(self.start_offset_min, self.start_offset_max)
+        return self.start_offset_min
+
     def _next_shuffled(self) -> PlayRequest:
         assert self._bag is not None
-        if self.start_offset_max > self.start_offset_min:
-            start = self._rng.uniform(self.start_offset_min, self.start_offset_max)
-        else:
-            start = self.start_offset_min
-        return PlayRequest(path=self._bag.next(), start=start)
+        return PlayRequest(path=self._bag.next(), start=self._start_offset())
 
     def tune_in(self, *, now: Optional[float] = None) -> Optional[PlayRequest]:
         """Decide what to play the instant a viewer switches to this channel."""
-        if self.is_empty:
+        # Flipping to a channel never lands you mid-break, and cancels any
+        # in-progress passcode entry state the app was tracking for it.
+        self._break_queue = []
+        self._last_was_break = False
+
+        if self.is_empty or self.locked:
             return None
         now = time.time() if now is None else now
 
+        request: Optional[PlayRequest] = None
         if self.tune_in_mode == "resume" and self._resume_path is not None:
-            return PlayRequest(path=self._resume_path, start=self._resume_position)
-
-        if self.tune_in_mode == "broadcast":
+            request = PlayRequest(
+                path=self._resume_path, start=self._resume_position, resumed=True
+            )
+        elif self.tune_in_mode == "broadcast":
             schedule = self._ensure_broadcast(epoch=now)
             if schedule is not None:
-                return schedule.at(now)
-            # Fall through to random if the schedule could not be built.
-
-        return self._next_shuffled()
+                request = schedule.at(now)
+        if request is None:
+            # Random mode - or broadcast whose schedule could not be built.
+            request = self._next_shuffled()
+        self._record(request.path)
+        return request
 
     def advance(self) -> Optional[PlayRequest]:
         """Decide what to play when the current episode ends naturally."""
         if self.is_empty:
             return None
+
+        # Serve any queued break clips before anything else.
+        if self._break_queue:
+            self._last_was_break = True
+            return self._break_queue.pop(0)
+
+        # Only count actual episodes toward the break threshold - not the
+        # break clip that may have just finished.
+        if not self._last_was_break:
+            self._episodes_since_break += 1
+            if self._breaks is not None and self._episodes_since_break >= self._breaks.every:
+                self._episodes_since_break = 0
+                self._fill_break_queue()
+                if self._break_queue:
+                    self._last_was_break = True
+                    return self._break_queue.pop(0)
+
         if self.tune_in_mode == "broadcast" and self._broadcast is not None:
             # Roll straight into whatever airs next in the running order.
-            return self._broadcast.at(time.time())
-        return self._next_shuffled()
+            request = self._broadcast.at(time.time())
+        else:
+            request = self._next_shuffled()
+
+        self._last_was_break = False
+        self._record(request.path)
+        self._track_resume(request)
+        return request
+
+    # -- the remote's skip buttons ------------------------------------------
+    def skip(self) -> Optional[PlayRequest]:
+        """"Not this one": leave the current episode for another.
+
+        Steps forward through episodes already seen if the viewer went back,
+        otherwise draws a fresh one from the shuffle. A skip is not a natural
+        end, so it never triggers or counts toward a break block, and pressing
+        it during a break abandons the rest of the break.
+        """
+        if not self._skippable():
+            return None
+        if self._cursor < len(self._history) - 1:
+            self._cursor += 1
+            request = PlayRequest(self._history[self._cursor], start=self._start_offset())
+        else:
+            if len(self.episodes) < 2:
+                return None  # nothing else to show; don't restart the only one
+            request = self._next_shuffled()
+            if self._history and request.path == self._history[self._cursor]:
+                # Only possible when the current episode didn't come from the
+                # bag (a resumed film): draw once more rather than restart it.
+                request = self._next_shuffled()
+            self._record(request.path)
+        self._leave_break()
+        self._track_resume(request)
+        return request
+
+    def back(self) -> Optional[PlayRequest]:
+        """Return to the episode shown before this one on this channel.
+
+        During a break, "before this one" is the episode the break followed -
+        the viewer is asking for the show back, not for the one before it.
+        """
+        if not self._skippable():
+            return None
+        if self._last_was_break and self._cursor >= 0:
+            target = self._cursor
+        elif self._cursor > 0:
+            target = self._cursor - 1
+        else:
+            return None
+        self._cursor = target
+        self._leave_break()
+        request = PlayRequest(self._history[target], start=self._start_offset())
+        self._track_resume(request)
+        return request
+
+    def _skippable(self) -> bool:
+        # A broadcast channel is "live": its position comes from the clock, so
+        # a skip would just be undone the next time you tuned in. Better that
+        # the button does nothing than something that silently reverts.
+        return not (self.is_empty or self.locked or self.tune_in_mode == "broadcast")
+
+    def _leave_break(self) -> None:
+        self._break_queue = []
+        self._last_was_break = False
+
+    def _record(self, path: Path) -> None:
+        """Note ``path`` as what is on now. Playing something new after going
+        back discards the forward history, as in a web browser."""
+        if 0 <= self._cursor < len(self._history) and self._history[self._cursor] == path:
+            return
+        del self._history[self._cursor + 1 :]
+        self._history.append(path)
+        if len(self._history) > _HISTORY_LIMIT:
+            del self._history[0]
+        self._cursor = len(self._history) - 1
+
+    def _track_resume(self, request: PlayRequest) -> None:
+        if self.tune_in_mode == "resume":
+            # Whatever just started is what a flip-away-and-back should resume
+            # - not a stale position from the last time the channel changed.
+            # See docs/decisions: "advance() must clear the stale resume
+            # position" bug fix.
+            self._resume_path = request.path
+            self._resume_position = request.start
+
+    def _fill_break_queue(self) -> None:
+        if self._break_bag is None or self._breaks is None:
+            return
+        count = self._breaks.count_min
+        if self._breaks.count_max > self._breaks.count_min:
+            count = self._rng.randint(self._breaks.count_min, self._breaks.count_max)
+        self._break_queue = [
+            PlayRequest(path=self._break_bag.next(), start=0.0, is_break=True)
+            for _ in range(count)
+        ]
 
     def remember(self, path: Path, position: float) -> None:
         """Record where the viewer left off (for the "resume" mode)."""
         self._resume_path = path
         self._resume_position = max(0.0, position)
+
+    def forget_resume(self) -> None:
+        """Discard the remembered position (viewer chose to start over)."""
+        self._resume_path = None
+        self._resume_position = 0.0
+
+    @property
+    def resume_snapshot(self) -> Optional[tuple[Path, float]]:
+        """The remembered (path, position), or None if nothing is remembered."""
+        if self._resume_path is None:
+            return None
+        return (self._resume_path, self._resume_position)
+
+    # -- passcode lock --------------------------------------------------------
+    def unlock(self, code: str) -> bool:
+        """Try to unlock with ``code``. Returns whether it succeeded."""
+        if self.config.passcode is None:
+            self.locked = False
+            return True
+        if code == self.config.passcode:
+            self.locked = False
+            return True
+        return False
+
+    def relock(self) -> None:
+        if self.config.passcode is not None:
+            self.locked = True
+
+    # -- introspection (used by `--check`) -------------------------------------
+    @property
+    def break_info(self) -> Optional[tuple[int, int]]:
+        """(clip_count, every_n_episodes) if breaks are configured, else None."""
+        if self._breaks is None:
+            return None
+        count = len(self._break_bag) if self._break_bag else 0
+        return (count, self._breaks.every)
 
     # -- broadcast schedule -------------------------------------------------
     def _ensure_broadcast(self, *, epoch: float) -> Optional[BroadcastSchedule]:
@@ -311,9 +500,20 @@ class ChannelLineup:
         return self.current
 
 
+def _effective_breaks(
+    global_breaks: Optional[BreaksConfig], ch_cfg: ChannelConfig
+) -> Optional[BreaksConfig]:
+    if ch_cfg.breaks_disabled:
+        return None
+    if ch_cfg.breaks is not None:
+        return ch_cfg.breaks
+    return global_breaks
+
+
 def build_lineup(config: Config, *, rng: Optional[random.Random] = None) -> ChannelLineup:
     """Scan every configured channel folder and build the full lineup."""
     base_rng = rng or random.Random(config.shuffle_seed)
+    saved_state = load_state(config.state_file)
     channels: List[Channel] = []
     for i, ch_cfg in enumerate(config.channels):
         episodes = scan_episodes(
@@ -335,16 +535,37 @@ def build_lineup(config: Config, *, rng: Optional[random.Random] = None) -> Chan
             ch_rng = random.Random(hash((config.shuffle_seed, ch_cfg.number, i)) & 0xFFFFFFFF)
         else:
             ch_rng = random.Random()
-        channels.append(
-            Channel(
-                ch_cfg,
-                episodes,
-                tune_in=config.tune_in,
-                start_offset_min=config.start_offset_min,
-                start_offset_max=config.start_offset_max,
-                rng=ch_rng,
-            )
+
+        breaks_cfg = _effective_breaks(config.breaks, ch_cfg)
+        break_clips: List[Path] = []
+        if breaks_cfg is not None and breaks_cfg.path is not None:
+            break_clips = scan_episodes(breaks_cfg.path, config.video_extensions, recursive=True)
+            if not break_clips:
+                log.warning(
+                    "channel %s (%s) has breaks configured but no clips in %s",
+                    ch_cfg.number, ch_cfg.name, breaks_cfg.path,
+                )
+
+        lo, hi = ch_cfg.start_offset or (config.start_offset_min, config.start_offset_max)
+
+        channel = Channel(
+            ch_cfg,
+            episodes,
+            tune_in=ch_cfg.tune_in or config.tune_in,
+            start_offset_min=lo,
+            start_offset_max=hi,
+            rng=ch_rng,
+            breaks=breaks_cfg,
+            break_clips=break_clips,
         )
+
+        saved = saved_state.get(ch_cfg.number)
+        if saved:
+            saved_path = Path(str(saved.get("path", "")))
+            if saved_path.is_file():
+                channel.remember(saved_path, float(saved.get("position", 0.0)))
+
+        channels.append(channel)
     return ChannelLineup(channels)
 
 

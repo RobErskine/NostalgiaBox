@@ -200,3 +200,168 @@ def test_relative_paths_resolved_against_config_dir(tmp_path):
     cfg_file.write_text("channels:\n  - path: arthur\n    name: Arthur\n")
     cfg = load_config(cfg_file)
     assert cfg.channels[0].path == tmp_path / "arthur"
+
+
+def test_fullscreen_and_hwdec_defaults(tmp_path):
+    make_show(tmp_path, "a", 1)
+    cfg = config_from_dict({"channels": [{"path": str(tmp_path / "a")}]})
+    assert cfg.fullscreen is True
+    assert cfg.hwdec == "auto-safe"
+    cfg2 = config_from_dict(
+        {"fullscreen": False, "hwdec": "no", "channels": [{"path": str(tmp_path / "a")}]}
+    )
+    assert cfg2.fullscreen is False
+    assert cfg2.hwdec == "no"
+
+
+def test_state_file_resolved(tmp_path):
+    make_show(tmp_path, "a", 1)
+    cfg = config_from_dict(
+        {"state_file": "state.json", "channels": [{"path": str(tmp_path / "a")}]},
+        base_dir=tmp_path,
+    )
+    assert cfg.state_file == tmp_path / "state.json"
+    cfg_none = config_from_dict({"channels": [{"path": str(tmp_path / "a")}]})
+    assert cfg_none.state_file is None
+
+
+def test_channel_passcode_valid(tmp_path):
+    make_show(tmp_path, "a", 1)
+    cfg = config_from_dict(
+        {
+            "channels": [
+                {"path": str(tmp_path / "a"), "passcode": "1997", "locked_message": "LOCKED!"}
+            ]
+        }
+    )
+    assert cfg.channels[0].passcode == "1997"
+    assert cfg.channels[0].locked_message == "LOCKED!"
+
+
+def test_channel_passcode_defaults_none(tmp_path):
+    make_show(tmp_path, "a", 1)
+    cfg = config_from_dict({"channels": [{"path": str(tmp_path / "a")}]})
+    assert cfg.channels[0].passcode is None
+    assert cfg.channels[0].locked_message is None
+
+
+@pytest.mark.parametrize("bad", ["abcd", "12345678901", "", "12 34"])
+def test_channel_passcode_rejected(tmp_path, bad):
+    make_show(tmp_path, "a", 1)
+    with pytest.raises(ConfigError, match="passcode"):
+        config_from_dict({"channels": [{"path": str(tmp_path / "a"), "passcode": bad}]})
+
+
+def test_channel_tune_in_override(tmp_path):
+    make_show(tmp_path, "a", 1)
+    make_show(tmp_path, "b", 1)
+    cfg = config_from_dict(
+        {
+            "tune_in": "random",
+            "channels": [
+                {"path": str(tmp_path / "a"), "tune_in": "resume"},
+                {"path": str(tmp_path / "b")},
+            ],
+        }
+    )
+    assert cfg.channels[0].tune_in == "resume"
+    assert cfg.channels[1].tune_in is None  # inherits the global default
+
+
+def test_channel_bad_tune_in_override_rejected(tmp_path):
+    make_show(tmp_path, "a", 1)
+    with pytest.raises(ConfigError, match="tune_in"):
+        config_from_dict({"channels": [{"path": str(tmp_path / "a"), "tune_in": "nonsense"}]})
+
+
+def test_channel_start_offset_override(tmp_path):
+    make_show(tmp_path, "a", 1)
+    make_show(tmp_path, "b", 1)
+    cfg = config_from_dict(
+        {
+            "start_offset": [6, 10],
+            "channels": [
+                {"path": str(tmp_path / "a"), "start_offset": 0},
+                {"path": str(tmp_path / "b")},
+            ],
+        }
+    )
+    assert cfg.channels[0].start_offset == (0.0, 0.0)
+    assert cfg.channels[1].start_offset is None  # inherits the global range
+
+
+def test_breaks_global_defaults(tmp_path):
+    make_show(tmp_path, "a", 1)
+    cfg = config_from_dict({"channels": [{"path": str(tmp_path / "a")}]})
+    assert cfg.breaks is None
+
+
+def test_breaks_global_parsed(tmp_path):
+    make_show(tmp_path, "a", 1)
+    (tmp_path / "breaks").mkdir()
+    cfg = config_from_dict(
+        {
+            "media_root": str(tmp_path),
+            "breaks": {"path": "breaks", "every": 2, "count": [1, 3]},
+            "channels": [{"path": str(tmp_path / "a")}],
+        }
+    )
+    assert cfg.breaks.path == tmp_path / "breaks"
+    assert cfg.breaks.every == 2
+    assert (cfg.breaks.count_min, cfg.breaks.count_max) == (1, 3)
+
+
+def test_channel_breaks_disabled(tmp_path):
+    make_show(tmp_path, "a", 1)
+    (tmp_path / "breaks").mkdir()
+    cfg = config_from_dict(
+        {
+            "media_root": str(tmp_path),
+            "breaks": {"path": "breaks"},
+            "channels": [{"path": str(tmp_path / "a"), "breaks": False}],
+        }
+    )
+    assert cfg.channels[0].breaks_disabled is True
+
+
+def test_channel_breaks_override(tmp_path):
+    make_show(tmp_path, "a", 1)
+    (tmp_path / "breaks").mkdir()
+    (tmp_path / "special-breaks").mkdir()
+    cfg = config_from_dict(
+        {
+            "media_root": str(tmp_path),
+            "breaks": {"path": "breaks", "every": 1},
+            "channels": [
+                {"path": str(tmp_path / "a"), "breaks": {"path": "special-breaks", "every": 5}}
+            ],
+        }
+    )
+    ch_breaks = cfg.channels[0].breaks
+    assert ch_breaks.path == tmp_path / "special-breaks"
+    assert ch_breaks.every == 5
+
+
+def test_player_backend_default_and_override(tmp_path):
+    make_show(tmp_path, "a", 1)
+    base = {"channels": [{"path": str(tmp_path / "a")}]}
+    assert config_from_dict(base).player_backend == "auto"
+    assert config_from_dict({**base, "player_backend": "ipc"}).player_backend == "ipc"
+    assert config_from_dict({**base, "player_backend": "libmpv"}).player_backend == "libmpv"
+
+
+def test_bad_player_backend_rejected(tmp_path):
+    make_show(tmp_path, "a", 1)
+    with pytest.raises(ConfigError, match="player_backend"):
+        config_from_dict(
+            {"channels": [{"path": str(tmp_path / "a")}], "player_backend": "vlc"}
+        )
+
+
+def test_crt_max_height_defaults_and_parses(tmp_path):
+    from nostalgiabox.config import config_from_dict
+
+    base = {"channels": [{"number": 2, "name": "X", "path": str(tmp_path)}]}
+    assert config_from_dict(base).crt.max_height == 720
+    assert config_from_dict({**base, "crt": {"max_height": 0}}).crt.max_height == 0
+    assert config_from_dict({**base, "crt": {"max_height": 1080}}).crt.max_height == 1080

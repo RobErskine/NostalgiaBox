@@ -15,11 +15,44 @@ the interesting logic in ``app.py`` never has to know which one it is using.
 from __future__ import annotations
 
 import logging
+import sys
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 log = logging.getLogger(__name__)
+
+# First argument of the script-message that video-window keys send back to
+# us, so mpv's own messages and any other client's can be told apart.
+_WINDOW_KEY_PREFIX = "nostalgiabox"
+
+# mpv property holding the height of the video as the decoder produced it.
+# Deliberately not "video-out-params/h", which is the height after filters -
+# with force_4_3 that is always 720 and would tell us nothing about the source.
+_HEIGHT_PROPERTY = "video-params/h"
+
+
+def _shader_for_height(
+    shader: Optional[str], max_height: int, height: Optional[int]
+) -> Optional[str]:
+    """The ``glsl-shaders`` value suiting a source this tall ("" = no shader).
+
+    Anything taller than ``max_height`` is treated as a modern HD feature: the
+    CRT effect is both wrong for it and expensive, so it is dropped for the
+    duration of that item.
+
+    Returns ``None`` for "no opinion", which the caller must treat as "change
+    nothing". mpv reports the height as null for a moment on every file change;
+    answering that with a real value would flick the effect on at the start of
+    each HD film, just before the height arrived and turned it off again.
+    """
+    if not shader:
+        return ""
+    if not max_height:
+        return shader
+    if not height:
+        return None
+    return "" if height > max_height else shader
 
 # Reason strings passed to the "playback finished" callback.
 END_EOF = "eof"        # the file played to its natural end -> roll next episode
@@ -33,6 +66,11 @@ class Player(ABC):
     #: Called when playback of the current item finishes. Receives one of the
     #: END_* reason strings. Set by the application before playing anything.
     on_end: Optional[Callable[[str], None]] = None
+
+    #: Called when a key is pressed in the player's own video window. Receives
+    #: an action name (``"volume_up"``). Only players that own a window and can
+    #: report keys back (see :class:`MpvIpcPlayer`) ever call this.
+    on_key: Optional[Callable[[str], None]] = None
 
     @abstractmethod
     def play(self, path: Path, *, start: float = 0.0) -> None:
@@ -115,6 +153,7 @@ class MpvPlayer(Player):
         force_4_3: bool = True,
         audio_device: Optional[str] = None,
         extra_options: Optional[dict] = None,
+        crt_max_height: int = 0,
     ) -> None:
         try:
             import mpv  # type: ignore
@@ -192,6 +231,13 @@ class MpvPlayer(Player):
         # True while a looping filler clip (static / colour bars) is showing, so
         # its (non-)ending never advances the channel.
         self._suppress = True
+        self._shader = glsl_shaders or ""
+        self._crt_max_height = crt_max_height
+        self._crt_applied = self._shader
+
+        @self._mpv.property_observer(_HEIGHT_PROPERTY)
+        def _on_height(_name, value):  # pragma: no cover - needs libmpv + media
+            self._apply_crt(value)
 
         @self._mpv.property_observer("eof-reached")
         def _on_eof(_name, value):  # pragma: no cover - needs libmpv + media
@@ -214,6 +260,19 @@ class MpvPlayer(Player):
                     self.on_end(END_ERROR)
                 except Exception:  # noqa: BLE001
                     log.exception("error in on_end (error) callback")
+
+    def _apply_crt(self, height) -> None:  # pragma: no cover - needs libmpv
+        """Match the CRT shader to the height of whatever just loaded."""
+        wanted = _shader_for_height(self._shader, self._crt_max_height, height)
+        if wanted is None or wanted == self._crt_applied:
+            return
+        try:
+            self._mpv.command("set", "glsl-shaders", wanted)
+        except Exception:  # noqa: BLE001 - cosmetic; never interrupt playback
+            log.debug("could not change glsl-shaders", exc_info=True)
+            return
+        self._crt_applied = wanted
+        log.info("CRT effect %s (source height %s)", "off" if not wanted else "on", height)
 
     # -- playback -----------------------------------------------------------
     def play(self, path: Path, *, start: float = 0.0) -> None:
@@ -520,10 +579,354 @@ def _strip_ass(ass: str) -> str:  # pragma: no cover - trivial
     return text.strip()
 
 
+
+class MpvIpcPlayer(Player):
+    """A :class:`Player` that drives the ``mpv`` **binary** over its JSON IPC socket.
+
+    Why this exists: on macOS, libmpv (which :class:`MpvPlayer` uses) cannot open
+    a window from a plain Python process. It needs a Cocoa event loop running on
+    the main thread, which a CLI Python script does not provide - the symptom is
+    audio playing with no picture at all. The real ``mpv`` binary runs its own
+    event loop, so spawning it and talking to it over a unix socket works
+    everywhere, at the cost of one extra process.
+
+    Two deliberate simplifications versus :class:`MpvPlayer`:
+
+    * ``play_transition`` falls back to the base-class behaviour (cut straight to
+      the episode, no static burst), since per-file options in ``loadfile``
+      changed shape across mpv versions and this backend is for dev machines.
+    * playback position comes from an observed ``time-pos`` property rather than
+      a synchronous query, so it is up to a moment stale - which is fine for the
+      resume feature's purposes.
+    """
+
+    def __init__(
+        self,
+        *,
+        fullscreen: bool = True,
+        hwdec: str = "auto-safe",
+        glsl_shaders: Optional[str] = None,
+        fonts_dir: Optional[Path] = None,
+        force_4_3: bool = True,
+        audio_device: Optional[str] = None,
+        extra_options: Optional[dict] = None,
+        mpv_binary: str = "mpv",
+        connect_timeout: float = 10.0,
+        window_keys: Optional[Dict[str, str]] = None,
+        crt_max_height: int = 0,
+    ) -> None:
+        import shutil
+        import socket
+        import subprocess
+        import tempfile
+        import threading
+
+        if shutil.which(mpv_binary) is None:
+            raise RuntimeError(
+                f"the '{mpv_binary}' binary was not found. Install it with "
+                "`brew install mpv` (macOS) or `sudo apt install mpv` (Linux)."
+            )
+        if fonts_dir is not None:
+            _install_fonts_for_mpv(fonts_dir)
+
+        self._sock_dir = tempfile.mkdtemp(prefix="nostalgiabox-mpv-")
+        self._socket_path = str(Path(self._sock_dir) / "mpv.sock")
+
+        args = [
+            mpv_binary,
+            f"--input-ipc-server={self._socket_path}",
+            # Same behaviour as the libmpv backend - see MpvPlayer for why each
+            # of these matters (keep-open in particular is what makes
+            # "eof-reached" the reliable end-of-episode signal).
+            "--idle=yes",
+            "--force-window=yes",
+            "--keep-open=yes",
+            "--prefetch-playlist=yes",
+            "--osc=no",
+            "--input-default-bindings=no",
+            # Keys typed at the video window are wanted (see _bind_window_keys),
+            # but only ours: mpv's own bindings stay off, so 'q' does not close
+            # the window behind the application's back.
+            f"--input-vo-keyboard={'yes' if window_keys else 'no'}",
+            # The terminal belongs to the application (its stdin backend reads
+            # the dev keyboard there). Leave it alone: two readers on one
+            # terminal race for every keystroke.
+            "--input-terminal=no",
+            "--keepaspect=yes",
+            "--video-unscaled=no",
+            "--cursor-autohide=always",
+            "--osd-font-size=40",
+            f"--hwdec={hwdec}",
+            f"--fullscreen={'yes' if fullscreen else 'no'}",
+        ]
+        if audio_device:
+            args.append(f"--audio-device={audio_device}")
+        if glsl_shaders:
+            args.append(f"--glsl-shaders={glsl_shaders}")
+        if force_4_3:
+            args.append(
+                "--vf=lavfi=[scale=960:720:force_original_aspect_ratio=decrease,"
+                "pad=960:720:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1]"
+            )
+        for key, value in (extra_options or {}).items():
+            args.append(f"--{str(key).replace('_', '-')}={value}")
+
+        log.info("starting mpv: %s", " ".join(args))
+        self._proc = subprocess.Popen(
+            args,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+        self._sock = self._connect(socket, connect_timeout)
+        self._closed = False
+        self._suppress = True
+        self._time_pos: Optional[float] = None
+        self._send_lock = threading.Lock()
+        self._buffer = b""
+
+        self._reader = threading.Thread(target=self._read_loop, daemon=True)
+        self._reader.start()
+
+        self._shader = glsl_shaders or ""
+        self._crt_max_height = crt_max_height
+        self._crt_applied = self._shader
+
+        # Property ids are arbitrary; we only ever match on the property name.
+        self._command("observe_property", 1, "eof-reached")
+        self._command("observe_property", 2, "time-pos")
+        self._command("observe_property", 3, _HEIGHT_PROPERTY)
+        self._bind_window_keys(window_keys)
+
+    # -- plumbing -----------------------------------------------------------
+    def _connect(self, socket_mod, timeout: float):
+        import time as _time
+
+        deadline = _time.monotonic() + timeout
+        while _time.monotonic() < deadline:
+            if self._proc.poll() is not None:
+                raise RuntimeError(
+                    f"mpv exited (code {self._proc.returncode}) before its IPC "
+                    "socket appeared"
+                )
+            try:
+                sock = socket_mod.socket(socket_mod.AF_UNIX, socket_mod.SOCK_STREAM)
+                sock.connect(self._socket_path)
+                return sock
+            except OSError:
+                _time.sleep(0.05)
+        self._proc.terminate()
+        raise RuntimeError(
+            f"timed out waiting for mpv's IPC socket at {self._socket_path}"
+        )
+
+    def _apply_crt(self, height) -> None:
+        """Match the CRT shader to the height of whatever just loaded."""
+        wanted = _shader_for_height(self._shader, self._crt_max_height, height)
+        if wanted is None or wanted == self._crt_applied:
+            return
+        self._command("set_property", "glsl-shaders", wanted)
+        self._crt_applied = wanted
+        log.info("CRT effect %s (source height %s)", "off" if not wanted else "on", height)
+
+    def _bind_window_keys(self, window_keys: Optional[Dict[str, str]]) -> None:
+        """Make the video window report its keystrokes back over the IPC socket.
+
+        Each key is bound to ``script-message nostalgiabox <action>``, which mpv
+        echoes to us as a ``client-message`` event. That is what makes the
+        remote keys work while the *video* window has focus rather than the
+        terminal - on a laptop the video window is the one you naturally click.
+        """
+        for key, action in (window_keys or {}).items():
+            self._command(
+                "keybind", key, f"script-message {_WINDOW_KEY_PREFIX} {action}"
+            )
+
+    def _command(self, *args) -> None:
+        """Fire a command at mpv. Errors are logged, never raised at the caller."""
+        import json
+
+        if self._closed:
+            return
+        payload = json.dumps({"command": list(args)}) + "\n"
+        try:
+            with self._send_lock:
+                self._sock.sendall(payload.encode("utf-8"))
+        except OSError:
+            log.debug("mpv IPC send failed: %s", args, exc_info=True)
+
+    def _set(self, prop: str, value) -> None:
+        self._command("set_property", prop, value)
+
+    def _read_loop(self) -> None:  # pragma: no cover - needs a live mpv
+        import json
+
+        while not self._closed:
+            try:
+                chunk = self._sock.recv(65536)
+            except OSError:
+                break
+            if not chunk:
+                break
+            self._buffer += chunk
+            while b"\n" in self._buffer:
+                line, self._buffer = self._buffer.split(b"\n", 1)
+                if not line.strip():
+                    continue
+                try:
+                    msg = json.loads(line.decode("utf-8", "replace"))
+                except ValueError:
+                    continue
+                self._handle_message(msg)
+
+    def _handle_message(self, msg: dict) -> None:  # pragma: no cover - live mpv
+        event = msg.get("event")
+        if event == "client-message":
+            args = msg.get("args") or []
+            if len(args) >= 2 and args[0] == _WINDOW_KEY_PREFIX and self.on_key:
+                try:
+                    self.on_key(str(args[1]))
+                except Exception:  # noqa: BLE001 - never let a callback kill us
+                    log.exception("error in on_key callback")
+            return
+        if event != "property-change":
+            return
+        name, data = msg.get("name"), msg.get("data")
+        if name == _HEIGHT_PROPERTY:
+            self._apply_crt(data)
+            return
+        if name == "time-pos":
+            self._time_pos = float(data) if isinstance(data, (int, float)) else None
+        elif name == "eof-reached":
+            if data and not self._suppress and self.on_end is not None:
+                try:
+                    self.on_end(END_EOF)
+                except Exception:  # noqa: BLE001 - never let a callback kill us
+                    log.exception("error in on_end (eof) callback")
+
+    def _apply_start(self, start: float) -> None:
+        """Set the start offset applied to the *next* file mpv loads.
+
+        Done as a property rather than a per-file loadfile option because the
+        shape of loadfile's options argument changed across mpv versions.
+        """
+        self._set("start", f"+{start:.3f}" if start and start > 0 else "0")
+
+    # -- playback -----------------------------------------------------------
+    def play(self, path: Path, *, start: float = 0.0) -> None:
+        self._suppress = False
+        self._set("loop-file", "no")
+        self._apply_start(start)
+        self._command("loadfile", str(path), "replace")
+        self._set("pause", False)
+
+    def play_loop(self, path: Path) -> None:
+        self._suppress = True  # a looping clip should never trigger "next"
+        self._set("loop-file", "inf")
+        self._apply_start(0.0)
+        self._command("loadfile", str(path), "replace")
+        self._set("pause", False)
+
+    def preload_next(self, target_path: Path, *, start: float = 0.0) -> None:
+        # Keep the current item on screen; queue the target as a second entry.
+        self._suppress = True  # ignore the outgoing show's eof during the bridge
+        self._set("loop-file", "no")
+        self._command("playlist-clear")
+        self._apply_start(start)
+        self._command("loadfile", str(target_path), "append")
+
+    def commit_switch(self) -> None:
+        self._suppress = False
+        self._command("playlist-next", "force")
+        self._command("playlist-clear")
+        self._set("pause", False)
+
+    def stop(self) -> None:
+        self._suppress = True
+        self._command("stop")
+
+    # -- audio --------------------------------------------------------------
+    def set_volume(self, volume: int) -> None:
+        self._set("volume", max(0, min(100, int(volume))))
+
+    def set_mute(self, muted: bool) -> None:
+        self._set("mute", bool(muted))
+
+    def get_time_pos(self) -> Optional[float]:
+        return self._time_pos
+
+    # -- OSD ----------------------------------------------------------------
+    def show_text(self, text: str, duration: float) -> None:
+        self._command("show-text", text, int(duration * 1000))
+
+    def set_overlay(self, overlay_id: int, ass: str, res_x: int, res_y: int) -> None:
+        self._command("osd-overlay", overlay_id, "ass-events", ass, res_x, res_y)
+
+    def clear_overlay(self, overlay_id: int) -> None:
+        self._command("osd-overlay", overlay_id, "none", "")
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self._command("quit")
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            self._sock.close()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            self._proc.wait(timeout=3)
+        except Exception:  # noqa: BLE001
+            try:
+                self._proc.kill()
+            except Exception:  # noqa: BLE001
+                pass
+        import shutil
+
+        shutil.rmtree(self._sock_dir, ignore_errors=True)
+
+
+def default_player_backend() -> str:
+    """Which real player backend suits this machine: ``"ipc"`` or ``"libmpv"``.
+
+    macOS gets the subprocess/IPC backend because libmpv cannot open its own
+    window from a plain Python process there (audio plays, no picture). Every
+    other platform uses libmpv, which needs no extra process.
+    """
+    return "ipc" if sys.platform == "darwin" else "libmpv"
+
+
+def create_player(
+    backend: str = "auto",
+    *,
+    window_keys: Optional[Dict[str, str]] = None,
+    **kwargs,
+) -> Player:
+    """Build the real player for ``backend`` (``auto``/``libmpv``/``ipc``).
+
+    ``window_keys`` (mpv key name -> action name) makes the video window accept
+    the remote keys itself. Only the IPC backend can do this; libmpv shares the
+    process with the evdev input backend the Pi uses, where taking the same key
+    twice would double every button press.
+    """
+    chosen = default_player_backend() if backend == "auto" else backend
+    if chosen == "ipc":
+        return MpvIpcPlayer(window_keys=window_keys, **kwargs)
+    if chosen == "libmpv":
+        return MpvPlayer(**kwargs)
+    raise ValueError(f"unknown player backend: {backend!r}")
+
 __all__ = [
     "Player",
     "MpvPlayer",
+    "MpvIpcPlayer",
     "MockPlayer",
+    "create_player",
+    "default_player_backend",
     "END_EOF",
     "END_ERROR",
     "END_STOPPED",

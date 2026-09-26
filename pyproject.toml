@@ -25,6 +25,11 @@ pi = [
     "python-mpv>=1.0.5",
     "evdev>=1.6.1",
 ]
+# Run the real player (mpv, in a window) on a Mac/Linux dev machine, without
+# evdev (Linux-only) - see scripts/make-dev-library.sh.
+desktop = [
+    "python-mpv>=1.0.5",
+]
 dev = [
     "pytest>=7.0",
 ]

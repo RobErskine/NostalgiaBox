@@ -6,11 +6,24 @@
 #
 # It starts the TV directly on the console (no desktop needed): mpv renders via
 # the KMS/DRM video output straight to the HDMI display.
+#
+# The box is an appliance that gets carried around, so it must come up on the
+# TV whatever state it's plugged in in:
+#   * no network        - nothing here waits for it
+#   * drive not plugged - it still starts, shows "connect the media drive", and
+#                         carries on the moment the drive appears (--hotplug)
+#   * drive pulled out  - the app exits and Restart=always brings it back to the
+#                         "connect the drive" card; plugging it back in re-scans
+#   * config edited     - same: exit, restart, fresh scan
 
 [Unit]
 Description=NostalgiaBox retro TV
-After=multi-user.target sound.target
+After=multi-user.target sound.target __MEDIA_MOUNT_UNIT__
+# Wants, not Requires: a missing drive must not stop the TV from starting.
+Wants=__MEDIA_MOUNT_UNIT__
 Conflicts=getty@tty1.service
+# Never give up restarting (the default gives up after 5 starts in 10s).
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -22,7 +35,9 @@ WorkingDirectory=__REPO_DIR__
 Environment=HOME=__HOME__
 # Render straight to the console/HDMI via KMS-DRM.
 Environment=XDG_RUNTIME_DIR=/run/user/__UID__
-ExecStart=__REPO_DIR__/.venv/bin/nostalgiabox --config __REPO_DIR__/config.yaml
+# The config lives on the media drive, so channels can be changed from any
+# computer the drive is plugged into - no terminal on the Pi needed.
+ExecStart=__REPO_DIR__/.venv/bin/nostalgiabox --config __MEDIA_PATH__/config.yaml --hotplug
 Restart=always
 RestartSec=3
 # Own the console so video can be shown on it.

@@ -50,6 +50,13 @@ _ID_MESSAGE = 4
 
 _BLACK = "&H00000000"
 
+# Volume bar geometry. Module-level because the corner logo has to sit clear of
+# the bar, and both need to agree on where the bar's top edge is.
+_BAR_W = 16
+_BAR_PITCH = 38
+_BAR_H = 48
+_BAR_ROW_TOP = _IY1 - _BAR_H            # bar sits just above the bottom safe edge
+
 
 class OverlayManager:
     """Draws and expires the TV's on-screen overlays."""
@@ -70,11 +77,20 @@ class OverlayManager:
 
     # -- public API ---------------------------------------------------------
     def show_channel_bug(
-        self, number: int, name: str, *, duration: Optional[float] = None
+        self,
+        number: int,
+        name: str,
+        *,
+        subtitle: Optional[str] = None,
+        duration: Optional[float] = None,
     ) -> None:
-        """Flash the channel number + name, like changing channels on a cable box."""
+        """Flash the channel number + name, like changing channels on a cable box.
+
+        ``subtitle`` adds a small third line (used for the "RESUMING - PRESS OK
+        TO START OVER" banner).
+        """
         dur = self._config.channel_bug_seconds if duration is None else duration
-        ass = _channel_bug_ass(number, name, self._ui)
+        ass = _channel_bug_ass(number, name, self._ui, subtitle=subtitle)
         self._player.set_overlay(_ID_CHANNEL, ass, CANVAS_W, CANVAS_H)
         self._arm(_ID_CHANNEL, dur)
 
@@ -150,7 +166,9 @@ def _style(ui: UiConfig, *, size: int, alpha: int = 0) -> str:
 # --------------------------------------------------------------------------
 # ASS builders (free functions so they are easy to unit test)
 # --------------------------------------------------------------------------
-def _channel_bug_ass(number: int, name: str, ui: UiConfig) -> str:
+def _channel_bug_ass(
+    number: int, name: str, ui: UiConfig, *, subtitle: Optional[str] = None
+) -> str:
     """Green digital 'CH 03' + show name, flashed inside the top-right of the frame."""
     num = f"{number:02d}"
     number_line = (
@@ -159,7 +177,14 @@ def _channel_bug_ass(number: int, name: str, ui: UiConfig) -> str:
     name_line = (
         rf"{{\an9\pos({_IX1},{_IY0 + 104}){_style(ui, size=40)}}}{_escape(name)}"
     )
-    return "\n".join([number_line, name_line])
+    lines = [number_line, name_line]
+    if subtitle:
+        lines.append(
+            rf"{{\an9\pos({_IX1},{_IY0 + 104 + 48}){_style(ui, size=28)}}}{_escape(subtitle)}"
+        )
+    if ui.logo:
+        lines.append(_logo_ass(ui))
+    return "\n".join(lines)
 
 
 def _volume_ass(level: int, muted: bool, ui: UiConfig) -> str:
@@ -168,12 +193,12 @@ def _volume_ass(level: int, muted: bool, ui: UiConfig) -> str:
     segments = 20
     filled = 0 if muted else round(level / 100 * segments)
 
-    bar_w = 16
-    pitch = 38
-    bar_h = 48
+    bar_w = _BAR_W
+    pitch = _BAR_PITCH
+    bar_h = _BAR_H
     total_w = (segments - 1) * pitch + bar_w
     x0 = _FRAME_CX - total_w // 2          # centre the bar within the 4:3 frame
-    row_top = _IY1 - bar_h                  # sit just above the bottom safe edge
+    row_top = _BAR_ROW_TOP                  # sit just above the bottom safe edge
     dot_r = 6
     green = _hex_to_ass(ui.color)
 
@@ -190,6 +215,8 @@ def _volume_ass(level: int, muted: bool, ui: UiConfig) -> str:
             )
         else:
             parts.append(_dot(cx=cx, cy=row_top + bar_h / 2, r=dot_r, fill=green))
+    if ui.logo:
+        parts.append(_logo_ass(ui))
     return "\n".join(parts)
 
 
@@ -200,6 +227,157 @@ def _message_ass(text: str, ui: UiConfig) -> str:
 
 def _standby_ass(ui: UiConfig) -> str:
     return rf"{{\an5\pos({_FRAME_CX},{CANVAS_H // 2}){_style(ui, size=72)}}}STANDBY"
+
+
+# --------------------------------------------------------------------------
+# Welcome / channel-guide screen
+# --------------------------------------------------------------------------
+# A full-screen "what's on this TV" card, like the welcome channel in a hotel
+# room. It is not an overlay the app shows: nostalgiabox.guide_gen renders it
+# once into a video file that becomes channel 1, so the running box treats it
+# as an ordinary channel with one very boring episode. Built here anyway, with
+# the same font, colour and glow as every other readout, so the welcome screen
+# and the TV's own OSD are unmistakably the same television.
+
+_GUIDE_TITLE_SIZE = 76
+_GUIDE_FOOT_SIZE = 28
+_GUIDE_ROWS_TOP = _IY0 + 142
+_GUIDE_ROWS_BOTTOM = _IY1 - 82      # leaves room for the two footer lines
+_GUIDE_MAX_ROW_H = 46
+# The list is a centred block rather than the full safe width, so a short
+# channel name does not leave its "LOCKED" tag stranded on the far side of the
+# screen. Columns: number, name, and a right-aligned tag.
+_GUIDE_COL_NUM = _FRAME_CX - 250
+_GUIDE_COL_NAME = _FRAME_CX - 170
+_GUIDE_COL_TAG = _FRAME_CX + 250
+
+
+def guide_ass(
+    channels: list, ui: UiConfig, *, brand: Optional[str] = None, hint: str = ""
+) -> str:
+    """The welcome screen: station name, the channel line-up, remote hints.
+
+    ``channels`` is a list of objects with ``number``, ``name`` and an optional
+    ``passcode`` (i.e. :class:`~nostalgiabox.config.ChannelConfig`). Everything
+    is laid out inside the 4:3 safe area, so the card reads correctly whether
+    or not the box is forcing 4:3. Row height shrinks to fit a long line-up
+    rather than running off the bottom of the screen.
+    """
+    title = _escape(brand or ui.brand)
+    lines = [
+        rf"{{\an8\pos({_FRAME_CX},{_IY0}){_style(ui, size=_GUIDE_TITLE_SIZE)}}}{title}",
+        rf"{{\an8\pos({_FRAME_CX},{_IY0 + 88}){_style(ui, size=30)}}}CHANNEL GUIDE",
+    ]
+
+    count = max(1, len(channels))
+    row_h = min(_GUIDE_MAX_ROW_H, (_GUIDE_ROWS_BOTTOM - _GUIDE_ROWS_TOP) // count)
+    size = max(18, int(row_h * 0.82))
+    tag_size = max(14, int(size * 0.62))
+
+    row_y = _GUIDE_ROWS_TOP
+    for channel in channels:
+        lines.append(
+            rf"{{\an7\pos({_GUIDE_COL_NUM},{row_y}){_style(ui, size=size)}}}"
+            f"{channel.number:02d}"
+        )
+        lines.append(
+            rf"{{\an7\pos({_GUIDE_COL_NAME},{row_y}){_style(ui, size=size)}}}"
+            f"{_escape(channel.name)}"
+        )
+        if getattr(channel, "passcode", None):
+            lines.append(
+                rf"{{\an9\pos({_GUIDE_COL_TAG},{row_y + size // 5})"
+                rf"{_style(ui, size=tag_size)}}}LOCKED"
+            )
+        row_y += row_h
+
+    if hint:
+        body = r"\N".join(_escape(part) for part in hint.split("\n"))
+        lines.append(
+            rf"{{\an2\pos({_FRAME_CX},{_IY1}){_style(ui, size=_GUIDE_FOOT_SIZE)}}}{body}"
+        )
+    return "\n".join(lines)
+
+
+# --------------------------------------------------------------------------
+# Corner logo
+# --------------------------------------------------------------------------
+# A "Time Warp TV" mark in the bottom-right corner, shown whenever the channel
+# banner or the volume bar is up. This is a PLACEHOLDER: the W held between two
+# portal rings is the idea, but the real mark is still to be drawn.
+#
+# It is built from ASS vector paths - the same primitive the volume bar's
+# rectangles and dots use - so it needs no image file and scales with the
+# canvas. libass cannot read SVG, but an SVG path converts almost directly:
+# "M x y" -> "m x y", "L x y" -> "l x y", "C ..." -> "b ...". So when the real
+# logo exists as an SVG of simple paths, only _logo_ass below has to change.
+
+_LOGO_SIZE = 52                          # cap height of the three letters
+_LOGO_RIGHT = _IX1                       # right edge, on the safe-area margin
+_LOGO_CY = _BAR_ROW_TOP - 46             # clear of the volume bar underneath
+_LOGO_LETTER_GAP = 56                    # centre-to-centre, T to W to T
+_PORTAL_RX = 12
+_PORTAL_RY = 30
+_PORTAL_GAP = 25                         # portal centre offset from the W's;
+                                         # their inner edges just graze the W
+
+
+def _logo_ass(ui: UiConfig) -> str:
+    """The corner mark: T W T, with the middle W held between two portals."""
+    green = _hex_to_ass(ui.color)
+    # Laid out right-to-left, so the mark always ends flush with the margin.
+    t_right = _LOGO_RIGHT - 18
+    w_mid = t_right - _LOGO_LETTER_GAP
+    t_left = w_mid - _LOGO_LETTER_GAP
+
+    parts = [
+        # Tight around the W, so it reads as held between them rather than
+        # sitting beside them.
+        _ring(cx=w_mid - _PORTAL_GAP, cy=_LOGO_CY,
+              rx=_PORTAL_RX, ry=_PORTAL_RY, stroke=green),
+        _ring(cx=w_mid + _PORTAL_GAP, cy=_LOGO_CY,
+              rx=_PORTAL_RX, ry=_PORTAL_RY, stroke=green),
+        rf"{{\an5\pos({t_left},{_LOGO_CY}){_style(ui, size=_LOGO_SIZE)}}}T",
+        rf"{{\an5\pos({t_right},{_LOGO_CY}){_style(ui, size=_LOGO_SIZE)}}}T",
+        # The W is a little larger and sheared, as if pulled by the portals.
+        rf"{{\an5\pos({w_mid},{_LOGO_CY}){_style(ui, size=_LOGO_SIZE + 8)}"
+        rf"\fax-0.1}}W",
+    ]
+    return "\n".join(parts)
+
+
+def _ellipse_path(rx: float, ry: float) -> str:
+    """An ellipse as four cubic bezier arcs, drawn from its top-left corner.
+
+    Coordinates start at (0, 0) and run to (2rx, 2ry) rather than being centred
+    on the origin, so the shape can be placed with ``\\an7`` - see _ring.
+    """
+    hx, hy = round(0.5523 * rx, 2), round(0.5523 * ry, 2)
+    x0, y0 = round(rx, 2), round(ry, 2)          # centre, in path coordinates
+    w, h = round(2 * rx, 2), round(2 * ry, 2)
+    return (
+        f"m {x0} 0 "
+        f"b {x0 + hx} 0 {w} {y0 - hy} {w} {y0} "
+        f"b {w} {y0 + hy} {x0 + hx} {h} {x0} {h} "
+        f"b {x0 - hx} {h} 0 {y0 + hy} 0 {y0} "
+        f"b 0 {y0 - hy} {x0 - hx} 0 {x0} 0"
+    )
+
+
+def _ring(*, cx: float, cy: float, rx: float, ry: float, stroke: str) -> str:
+    """An unfilled ellipse outline: a transparent fill plus a coloured border.
+
+    Anchored top-left (``\\an7``) at the shape's bounding box, like
+    :func:`_filled_rect`. Centring a *bordered* drawing with ``\\an5`` does not
+    land where the arithmetic says it should - libass sizes the box differently
+    once there is a border - so the corner is positioned explicitly instead.
+    """
+    path = _ellipse_path(rx, ry)
+    x, y = round(cx - rx), round(cy - ry)
+    return (
+        rf"{{\an7\pos({x},{y})\p1"
+        rf"\1a&HFF&\bord2\3c{stroke}\3a&H00&\shad0}}{path}{{\p0}}"
+    )
 
 
 def _filled_rect(*, x: float, y: float, w: float, h: float, fill: str) -> str:
@@ -231,4 +409,4 @@ def _escape(text: str) -> str:
     return text.replace("\\", "\\\\").replace("{", "(").replace("}", ")")
 
 
-__all__ = ["OverlayManager", "CANVAS_W", "CANVAS_H"]
+__all__ = ["OverlayManager", "guide_ass", "CANVAS_W", "CANVAS_H"]

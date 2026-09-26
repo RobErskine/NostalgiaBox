@@ -46,14 +46,30 @@ _EVDEV_ACTIONS: Dict[str, InputEvent] = {
     "KEY_OK": InputEvent(Action.ENTER),
     "KEY_SELECT": InputEvent(Action.ENTER),
     "KEY_SPACE": InputEvent(Action.ENTER),
-    # Info banner.
+    # Info banner. A remote's "menu"/listing button lands here too: there is no
+    # menu to open, so the useful thing it can do is say what is on right now.
     "KEY_INFO": InputEvent(Action.INFO),
+    "KEY_MENU": InputEvent(Action.INFO),
+    "KEY_EPG": InputEvent(Action.INFO),
     "KEY_I": InputEvent(Action.INFO),
     # Jump to previous channel (the classic "last" / "back" button).
     "KEY_LAST": InputEvent(Action.LAST_CHANNEL),
     "KEY_PREVIOUS": InputEvent(Action.LAST_CHANNEL),
     "KEY_BACK": InputEvent(Action.LAST_CHANNEL),
+    "KEY_BACKSPACE": InputEvent(Action.LAST_CHANNEL),
     "KEY_L": InputEvent(Action.LAST_CHANNEL),
+    # Jump to the home channel (channel 1, the welcome screen / guide).
+    "KEY_HOME": InputEvent(Action.HOME),
+    "KEY_HOMEPAGE": InputEvent(Action.HOME),
+    "KEY_H": InputEvent(Action.HOME),
+    # Skip episodes within a channel. Deliberately NOT the left/right arrows:
+    # those stay volume, because a TV remote's arrows arrive as the same keys
+    # over HDMI-CEC. A Flirc is taught "," and "." for its ◀ ▶ instead, and
+    # media remotes' ⏮ ⏭ work as they are.
+    "KEY_NEXTSONG": InputEvent(Action.NEXT_EPISODE),
+    "KEY_DOT": InputEvent(Action.NEXT_EPISODE),
+    "KEY_PREVIOUSSONG": InputEvent(Action.PREVIOUS_EPISODE),
+    "KEY_COMMA": InputEvent(Action.PREVIOUS_EPISODE),
     # Power / standby.
     "KEY_POWER": InputEvent(Action.POWER),
     "KEY_SLEEP": InputEvent(Action.POWER),
@@ -87,6 +103,9 @@ _ACTION_BY_NAME: Dict[str, InputEvent] = {
     "info": InputEvent(Action.INFO),
     "last_channel": InputEvent(Action.LAST_CHANNEL),
     "last": InputEvent(Action.LAST_CHANNEL),
+    "home": InputEvent(Action.HOME),
+    "next_episode": InputEvent(Action.NEXT_EPISODE),
+    "previous_episode": InputEvent(Action.PREVIOUS_EPISODE),
     "power": InputEvent(Action.POWER),
     "quit": InputEvent(Action.QUIT),
     "none": None,  # explicitly unbind a key
@@ -95,6 +114,19 @@ _ACTION_BY_NAME: Dict[str, InputEvent] = {
 
 def action_names() -> tuple[str, ...]:
     return tuple(_ACTION_BY_NAME)
+
+
+def action_from_name(name: str) -> Optional[InputEvent]:
+    """Map an action name (``volume_up``, ``digit_7``) to an InputEvent.
+
+    Raises :class:`ValueError` for an unknown name. ``"none"`` maps to None.
+    """
+    aname = str(name).strip().lower()
+    if aname.startswith("digit_") and aname[6:].isdigit():
+        return InputEvent.digit(int(aname[6:]))
+    if aname not in _ACTION_BY_NAME:
+        raise ValueError(f"unknown action '{name}'")
+    return _ACTION_BY_NAME[aname]
 
 
 def parse_key_overrides(raw: object) -> Dict[str, Optional[InputEvent]]:
@@ -113,16 +145,13 @@ def parse_key_overrides(raw: object) -> Dict[str, Optional[InputEvent]]:
         kname = str(key).strip().upper()
         if not kname.startswith("KEY_"):
             kname = "KEY_" + kname
-        aname = str(action).strip().lower()
-        if aname.startswith("digit_") and aname[6:].isdigit():
-            result[kname] = InputEvent.digit(int(aname[6:]))
-            continue
-        if aname not in _ACTION_BY_NAME:
+        try:
+            result[kname] = action_from_name(action)
+        except ValueError:
             raise ValueError(
                 f"unknown action '{action}' for key '{key}'. "
                 f"Valid actions: {', '.join(_ACTION_BY_NAME)} (or digit_0..digit_9)"
-            )
-        result[kname] = _ACTION_BY_NAME[aname]
+            ) from None
     return result
 
 
@@ -141,6 +170,10 @@ _CHAR_TO_KEY: Dict[str, str] = {
     "I": "KEY_INFO",
     "l": "KEY_LAST",
     "L": "KEY_LAST",
+    "h": "KEY_HOME",
+    "H": "KEY_HOME",
+    ".": "KEY_DOT",
+    ",": "KEY_COMMA",
     "p": "KEY_POWER",
     "P": "KEY_POWER",
     "q": "KEY_Q",
@@ -160,6 +193,39 @@ _ESCAPE_TO_KEY: Dict[str, str] = {
     "[C": "KEY_RIGHT",
     "[D": "KEY_LEFT",
 }
+
+
+# --------------------------------------------------------------------------
+# mpv video-window keys -> action names
+# --------------------------------------------------------------------------
+# On a dev machine the video window is a separate mpv window, and whichever
+# window has focus gets the keystrokes - so the same remote keys have to work
+# there as well as in the terminal. These are mpv's own key names (see
+# `mpv --input-keylist`); the player binds each one to a message it sends back
+# over its IPC socket. Deliberately the same set as the terminal keys above.
+MPV_WINDOW_KEYS: Dict[str, str] = {
+    "UP": "channel_up",
+    "DOWN": "channel_down",
+    "RIGHT": "volume_up",
+    "LEFT": "volume_down",
+    "+": "volume_up",
+    "=": "volume_up",
+    "-": "volume_down",
+    "m": "mute",
+    "i": "info",
+    "l": "last_channel",
+    "h": "home",
+    "HOME": "home",
+    ".": "next_episode",
+    ",": "previous_episode",
+    "p": "power",
+    "q": "quit",
+    "ESC": "quit",
+    "ENTER": "enter",
+    "SPACE": "enter",
+}
+for _d in range(10):
+    MPV_WINDOW_KEYS[str(_d)] = f"digit_{_d}"
 
 
 def stdin_char_to_event(char: str) -> Optional[InputEvent]:
@@ -194,6 +260,10 @@ _CEC_ACTIONS: Dict[str, InputEvent] = {
     "display information": InputEvent(Action.INFO),
     "previous channel": InputEvent(Action.LAST_CHANNEL),
     "exit": InputEvent(Action.LAST_CHANNEL),
+    "root menu": InputEvent(Action.HOME),
+    "contents menu": InputEvent(Action.HOME),
+    "forward": InputEvent(Action.NEXT_EPISODE),       # the TV remote's ⏭
+    "backward": InputEvent(Action.PREVIOUS_EPISODE),  # the TV remote's ⏮
     "power": InputEvent(Action.POWER),
     "power toggle function": InputEvent(Action.POWER),
     "power off function": InputEvent(Action.POWER),
@@ -215,4 +285,6 @@ __all__ = [
     "cec_key_to_event",
     "parse_key_overrides",
     "action_names",
+    "action_from_name",
+    "MPV_WINDOW_KEYS",
 ]

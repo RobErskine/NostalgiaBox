@@ -99,3 +99,32 @@ def test_cec_keys():
     assert cec_key_to_event("number 4").value == 4
     assert cec_key_to_event("power").action == Action.POWER
     assert cec_key_to_event("nonsense") is None
+
+
+def test_mpv_window_keys_all_name_real_actions():
+    """A typo here would be silently dropped at runtime, so check the table."""
+    from nostalgiabox.input.keymap import MPV_WINDOW_KEYS, action_from_name
+
+    for key, action in MPV_WINDOW_KEYS.items():
+        assert action_from_name(action) is not None, f"{key} -> {action}"
+
+
+def test_mpv_window_keys_cover_the_same_actions_as_the_terminal():
+    """Both dev inputs must drive the same remote, or one window feels broken."""
+    from nostalgiabox.input.keymap import (
+        MPV_WINDOW_KEYS,
+        action_from_name,
+        stdin_char_to_event,
+        stdin_escape_to_event,
+    )
+
+    window = {action_from_name(a).action for a in MPV_WINDOW_KEYS.values()}
+    terminal = set()
+    for char in "+=-mMiIlLhH.,pPqQ\r\n 0123456789":
+        event = stdin_char_to_event(char)
+        if event is not None:
+            terminal.add(event.action)
+    for seq in ("[A", "[B", "[C", "[D"):
+        terminal.add(stdin_escape_to_event(seq).action)
+
+    assert terminal == window

@@ -8,15 +8,13 @@ from nostalgiabox.channel import (
     detect_season,
     scan_episodes,
 )
-from nostalgiabox.config import config_from_dict
+from nostalgiabox.config import BreaksConfig, ChannelConfig, config_from_dict
 from tests.helpers import make_show
 
 
-def _channel(tmp_path, name="arthur", episodes=4, **kw):
+def _channel(tmp_path, name="arthur", episodes=4, *, ch_cfg=None, **kw):
     folder = make_show(tmp_path, name, episodes)
-    from nostalgiabox.config import ChannelConfig
-
-    cfg = ChannelConfig(number=kw.pop("number", 3), name=name, path=folder)
+    cfg = ch_cfg or ChannelConfig(number=kw.pop("number", 3), name=name, path=folder)
     eps = scan_episodes(folder, [".mp4"])
     return Channel(cfg, eps, rng=random.Random(0), **kw)
 
@@ -211,3 +209,352 @@ def test_lineup_sorted_by_number(tmp_path):
     )
     lineup = build_lineup(cfg)
     assert lineup.numbers == [3, 9]
+
+
+# -- passcode lock ----------------------------------------------------------
+def test_locked_channel_tune_in_returns_none(tmp_path):
+    folder = make_show(tmp_path, "adultswim", 3)
+    ch_cfg = ChannelConfig(number=9, name="Adult Swim", path=folder, passcode="1997")
+    ch = _channel(tmp_path, "adultswim", 3, ch_cfg=ch_cfg)
+    assert ch.locked is True
+    assert ch.tune_in() is None
+
+
+def test_unlock_with_wrong_code_stays_locked(tmp_path):
+    folder = make_show(tmp_path, "adultswim", 3)
+    ch_cfg = ChannelConfig(number=9, name="Adult Swim", path=folder, passcode="1997")
+    ch = _channel(tmp_path, "adultswim", 3, ch_cfg=ch_cfg)
+    assert ch.unlock("0000") is False
+    assert ch.locked is True
+    assert ch.tune_in() is None
+
+
+def test_unlock_with_correct_code_plays(tmp_path):
+    folder = make_show(tmp_path, "adultswim", 3)
+    ch_cfg = ChannelConfig(number=9, name="Adult Swim", path=folder, passcode="1997")
+    ch = _channel(tmp_path, "adultswim", 3, ch_cfg=ch_cfg)
+    assert ch.unlock("1997") is True
+    assert ch.locked is False
+    assert ch.tune_in() is not None
+
+
+def test_relock_locks_again(tmp_path):
+    folder = make_show(tmp_path, "adultswim", 3)
+    ch_cfg = ChannelConfig(number=9, name="Adult Swim", path=folder, passcode="1997")
+    ch = _channel(tmp_path, "adultswim", 3, ch_cfg=ch_cfg)
+    ch.unlock("1997")
+    ch.relock()
+    assert ch.locked is True
+    assert ch.tune_in() is None
+
+
+def test_unlocked_channel_ignores_relock(tmp_path):
+    ch = _channel(tmp_path)  # no passcode configured
+    ch.relock()
+    assert ch.locked is False
+    assert ch.tune_in() is not None
+
+
+def test_locked_channel_stays_in_lineup(tmp_path):
+    make_show(tmp_path, "a", 1)
+    make_show(tmp_path, "b", 1)
+    cfg = config_from_dict(
+        {
+            "channels": [
+                {"number": 2, "name": "A", "path": str(tmp_path / "a")},
+                {"number": 9, "name": "B", "path": str(tmp_path / "b"), "passcode": "1234"},
+            ]
+        }
+    )
+    lineup = build_lineup(cfg)
+    assert lineup.numbers == [2, 9]
+    assert lineup.up().number == 9
+    assert lineup.select_number(9) is not None
+    assert lineup.select_number(9).tune_in() is None  # still locked
+
+
+# -- per-channel tune_in / start_offset override -----------------------------
+def test_build_lineup_honours_per_channel_tune_in_and_offset(tmp_path):
+    make_show(tmp_path, "a", 2)
+    make_show(tmp_path, "b", 2)
+    cfg = config_from_dict(
+        {
+            "tune_in": "random",
+            "start_offset": [6, 10],
+            "channels": [
+                {
+                    "number": 2,
+                    "name": "A",
+                    "path": str(tmp_path / "a"),
+                    "tune_in": "resume",
+                    "start_offset": 0,
+                },
+                {"number": 3, "name": "B", "path": str(tmp_path / "b")},
+            ],
+        }
+    )
+    lineup = build_lineup(cfg)
+    a = lineup.select_number(2)
+    b = lineup.select_number(3)
+    assert a.tune_in_mode == "resume"
+    assert (a.start_offset_min, a.start_offset_max) == (0.0, 0.0)
+    assert b.tune_in_mode == "random"
+    assert (b.start_offset_min, b.start_offset_max) == (6.0, 10.0)
+
+
+# -- resume bug fix: advance() must not leave a stale resume position --------
+def test_advance_tracks_new_episode_on_resume_channel(tmp_path):
+    ch = _channel(tmp_path, episodes=4, tune_in="resume")
+    first = ch.tune_in()
+    assert first.resumed is False  # nothing remembered yet
+    # Simulate watching to the end without an explicit remember() (which only
+    # happens on a channel change in the app) - advance() must track the new
+    # episode itself, not leave the resume pointer stale.
+    second = ch.advance()
+    assert ch.resume_snapshot == (second.path, second.start)
+    again = ch.tune_in()
+    assert again.path == second.path
+    assert again.resumed is True
+
+
+def test_forget_resume_clears_position(tmp_path):
+    ch = _channel(tmp_path, tune_in="resume")
+    first = ch.tune_in()
+    ch.remember(first.path, 99.0)
+    ch.forget_resume()
+    assert ch.resume_snapshot is None
+    fresh = ch.tune_in()
+    assert fresh.resumed is False
+
+
+# -- break blocks -------------------------------------------------------------
+def _breaks_channel(tmp_path, *, every=2, count=(1, 1), n_episodes=6, n_breaks=4):
+    folder = make_show(tmp_path, "show", n_episodes)
+    breaks_folder = make_show(tmp_path, "breaks", n_breaks)
+    eps = scan_episodes(folder, [".mp4"])
+    clips = scan_episodes(breaks_folder, [".mp4"])
+    ch_cfg = ChannelConfig(number=4, name="Kids", path=folder)
+    breaks_cfg = BreaksConfig(path=breaks_folder, every=every, count_min=count[0], count_max=count[1])
+    return Channel(ch_cfg, eps, rng=random.Random(0), breaks=breaks_cfg, break_clips=clips)
+
+
+def test_break_fires_after_n_episodes(tmp_path):
+    ch = _breaks_channel(tmp_path, every=2)
+    ch.tune_in()
+    r1 = ch.advance()  # episode 1 of 2 -> not a break yet
+    assert r1.is_break is False
+    r2 = ch.advance()  # episode 2 of 2 -> break fires
+    assert r2.is_break is True
+    r3 = ch.advance()  # break clip ended -> back to a normal episode
+    assert r3.is_break is False
+
+
+def test_break_count_multiple_clips_then_episode(tmp_path):
+    ch = _breaks_channel(tmp_path, every=1, count=(2, 2))
+    ch.tune_in()
+    r1 = ch.advance()  # 1 episode elapsed -> break of 2 clips queued
+    assert r1.is_break is True
+    r2 = ch.advance()  # second queued break clip
+    assert r2.is_break is True
+    r3 = ch.advance()  # queue drained -> normal episode
+    assert r3.is_break is False
+
+
+def test_break_clips_start_at_zero(tmp_path):
+    ch = _breaks_channel(tmp_path, every=1)
+    ch.tune_in()
+    r = ch.advance()
+    assert r.is_break is True
+    assert r.start == 0.0
+
+
+def test_tune_in_clears_partial_break_queue(tmp_path):
+    ch = _breaks_channel(tmp_path, every=1, count=(3, 3))
+    ch.tune_in()
+    ch.advance()  # queues a 3-clip break, returns the first
+    assert ch._break_queue  # still has 2 queued
+    req = ch.tune_in()
+    assert req.is_break is False
+    assert ch._break_queue == []
+
+
+def test_break_clips_all_play_before_repeat(tmp_path):
+    ch = _breaks_channel(tmp_path, every=1, count=(1, 1), n_episodes=8, n_breaks=3)
+    ch.tune_in()
+    seen = set()
+    for _ in range(3):
+        r = ch.advance()  # break clip
+        assert r.is_break is True
+        seen.add(r.path)
+        ch.advance()  # back to a normal episode
+    assert len(seen) == 3  # every break clip aired once before any repeat
+
+
+def test_no_breaks_configured_never_fires(tmp_path):
+    ch = _channel(tmp_path, episodes=6, tune_in="random")
+    ch.tune_in()
+    for _ in range(10):
+        assert ch.advance().is_break is False
+
+
+def test_breaks_disabled_via_effective_breaks(tmp_path):
+    from nostalgiabox.channel import _effective_breaks
+
+    breaks_cfg = BreaksConfig(path=tmp_path, every=1)
+    disabled_ch_cfg = ChannelConfig(
+        number=2, name="Baby", path=tmp_path, breaks_disabled=True
+    )
+    assert _effective_breaks(breaks_cfg, disabled_ch_cfg) is None
+    plain_ch_cfg = ChannelConfig(number=3, name="Kids", path=tmp_path)
+    assert _effective_breaks(breaks_cfg, plain_ch_cfg) is breaks_cfg
+
+
+# -- skip buttons (◀ / ▶) ------------------------------------------------------
+# ▶ means "not this one"; ◀ means "the one before". Back/forward through what
+# was shown, like shuffle on a music player; fresh draws only at the end.
+
+
+def test_skip_gives_a_different_episode(tmp_path):
+    ch = _channel(tmp_path)
+    first = ch.tune_in().path
+
+    second = ch.skip().path
+
+    assert second != first
+
+
+def test_back_returns_to_the_previous_episode(tmp_path):
+    ch = _channel(tmp_path)
+    first = ch.tune_in().path
+    ch.skip()
+
+    assert ch.back().path == first
+
+
+def test_back_then_skip_goes_forward_again_not_somewhere_new(tmp_path):
+    ch = _channel(tmp_path, episodes=8)
+    ch.tune_in()
+    second = ch.skip().path
+    ch.back()
+
+    assert ch.skip().path == second
+
+
+def test_back_at_the_start_of_history_does_nothing(tmp_path):
+    ch = _channel(tmp_path)
+    ch.tune_in()
+
+    assert ch.back() is None
+
+
+def test_natural_advance_is_part_of_the_history(tmp_path):
+    ch = _channel(tmp_path)
+    ch.tune_in()
+    finished = ch.advance().path
+    ch.advance()
+
+    assert ch.back().path == finished
+
+
+def test_new_episode_after_going_back_drops_the_forward_history(tmp_path):
+    """Same as a web browser: go back, then somewhere new, and 'forward' is gone."""
+    ch = _channel(tmp_path, episodes=8)
+    ch.tune_in()
+    abandoned = ch.skip().path
+    ch.back()
+    ch.advance()                     # the episode ended; a fresh one started
+
+    assert abandoned not in ch._history
+    assert ch._cursor == len(ch._history) - 1   # nothing left "forward"
+
+
+def test_skip_does_nothing_on_a_single_episode_channel(tmp_path):
+    """The guide card: ▶ must not restart the only thing on the channel."""
+    ch = _channel(tmp_path, episodes=1)
+    ch.tune_in()
+
+    assert ch.skip() is None
+    assert ch.back() is None
+
+
+def test_skip_does_nothing_on_locked_or_empty_channels(tmp_path):
+    locked = _channel(
+        tmp_path,
+        ch_cfg=ChannelConfig(number=9, name="AS", path=make_show(tmp_path, "as", 4), passcode="1997"),
+    )
+    assert locked.skip() is None and locked.back() is None
+
+    empty = Channel(ChannelConfig(number=5, name="E", path=tmp_path), [], rng=random.Random(0))
+    assert empty.skip() is None and empty.back() is None
+
+
+def test_skip_does_nothing_on_broadcast_channels(tmp_path):
+    """A 'live' channel's position comes from the clock; a skip would revert."""
+    ch = _channel(tmp_path, tune_in="broadcast")
+    ch.tune_in(now=1000.0)
+
+    assert ch.skip() is None
+    assert ch.back() is None
+
+
+def test_skip_never_triggers_or_counts_toward_a_break(tmp_path):
+    ch = _breaks_channel(tmp_path, every=2)
+    ch.tune_in()
+    for _ in range(5):
+        assert ch.skip().is_break is False
+
+    # The very next natural end is only the first episode toward the break.
+    assert ch.advance().is_break is False
+
+
+def test_skip_during_a_break_abandons_the_rest_of_it(tmp_path):
+    # every=2, so a fresh break can't follow the very next episode: if the next
+    # natural end yields a break clip, it can only be a leftover from this one.
+    ch = _breaks_channel(tmp_path, every=2, count=(3, 3))
+    ch.tune_in()
+    assert ch.advance().is_break is False
+    assert ch.advance().is_break is True   # a three-clip break has started
+
+    assert ch.skip().is_break is False
+    assert ch.advance().is_break is False  # the other two clips are gone
+
+
+def test_back_during_a_break_returns_to_the_show_it_interrupted(tmp_path):
+    ch = _breaks_channel(tmp_path, every=1)
+    before_break = ch.tune_in().path
+    assert ch.advance().is_break is True
+
+    assert ch.back().path == before_break
+
+
+def test_skip_on_a_resume_channel_is_what_you_resume(tmp_path):
+    """Flip away after a skip and back: resume the film you skipped TO."""
+    ch = _channel(tmp_path, tune_in="resume")
+    ch.tune_in()
+    skipped_to = ch.skip().path
+
+    assert ch.tune_in().path == skipped_to
+
+
+def test_skip_past_a_resumed_film_draws_something_else(tmp_path):
+    ch = _channel(tmp_path, tune_in="resume")
+    resumed = ch.episodes[0]
+    ch.remember(resumed, 1234.0)
+    assert ch.tune_in().path == resumed
+
+    for _ in range(20):                    # every draw, not just a lucky one
+        ch.remember(resumed, 1234.0)
+        ch._history, ch._cursor = [], -1
+        ch.tune_in()
+        assert ch.skip().path != resumed
+
+
+def test_history_is_bounded(tmp_path):
+    from nostalgiabox.channel import _HISTORY_LIMIT
+
+    ch = _channel(tmp_path, episodes=4)
+    ch.tune_in()
+    for _ in range(_HISTORY_LIMIT + 30):
+        ch.skip()
+
+    assert len(ch._history) == _HISTORY_LIMIT

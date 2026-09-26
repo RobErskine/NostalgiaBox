@@ -10,6 +10,7 @@ restores it on exit.
 from __future__ import annotations
 
 import logging
+import os
 import select
 import sys
 from typing import Optional
@@ -29,6 +30,7 @@ class StdinBackend(InputBackend):
         super().__init__()
         self._fd: Optional[int] = None
         self._old_settings = None
+        self._pending = ""
 
     @staticmethod
     def is_available() -> bool:
@@ -50,13 +52,9 @@ class StdinBackend(InputBackend):
         log.info("stdin input active (arrows=chan/vol, digits, m, i, l, p, q)")
         try:
             while not self.stopping:
-                r, _, _ = select.select([sys.stdin], [], [], 0.3)
-                if not r:
-                    continue
-                ch = sys.stdin.read(1)
-                if not ch:
-                    continue
-                self._handle_char(ch)
+                ch = self._next_char(0.3)
+                if ch:
+                    self._handle_char(ch)
         finally:
             self._restore()
 
@@ -77,11 +75,38 @@ class StdinBackend(InputBackend):
         """After an ESC, non-blockingly grab up to two more chars (e.g. ``[A``)."""
         seq = ""
         for _ in range(2):
-            r, _, _ = select.select([sys.stdin], [], [], 0.02)
-            if not r:
+            ch = self._next_char(0.02)
+            if not ch:
                 break
-            seq += sys.stdin.read(1)
+            seq += ch
         return seq
+
+    def _next_char(self, timeout: float) -> str:
+        """Return one keystroke, or "" if none arrives within ``timeout``.
+
+        Reads straight from the file descriptor with :func:`os.read` rather
+        than from ``sys.stdin``. Buffered text I/O would swallow the whole
+        burst: an arrow key arrives as the three bytes ``ESC [ A`` at once,
+        ``sys.stdin.read(1)`` pulls all three into Python's own buffer, and the
+        following ``select()`` on the descriptor then reports "nothing there".
+        The arrow would look like a bare ESC - which means quit.
+        """
+        if not self._pending:
+            fd = self._fd
+            if fd is None:
+                return ""
+            r, _, _ = select.select([fd], [], [], timeout)
+            if not r:
+                return ""
+            try:
+                data = os.read(fd, 64)
+            except OSError:
+                return ""
+            if not data:
+                return ""
+            self._pending = data.decode("utf-8", "replace")
+        ch, self._pending = self._pending[0], self._pending[1:]
+        return ch
 
     def _close(self) -> None:
         self._restore()

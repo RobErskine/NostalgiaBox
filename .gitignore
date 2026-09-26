@@ -13,6 +13,11 @@ venv/
 # Each install has its own config (the installer creates it from
 # config.example.yaml). Keep personal configs out of the repo.
 config.yaml
+# Resume positions (config.yaml can keep them next to itself on the SD card).
+.nostalgiabox-state.json
+# Dev sandbox library + config (created by `scripts/make-dev-library.sh`).
+config.dev.yaml
+dev-media/
 # Generated filler clips (created by `nostalgiabox --generate-assets`).
 nostalgiabox/assets/*.mp4
 
