@@ -160,12 +160,16 @@ def generate_guide(
         partial = out_path.with_name(out_path.name + ".partial")
         # A still at 5fps with a near-lossless quality setting: a tiny file that
         # keeps thin text sharp. yuv420p High profile is what the Pi 3 decodes
-        # in hardware; 1080p is the most it will output anyway.
+        # in hardware; 1080p is the most it will output anyway. The fastest
+        # preset on two threads: for a picture that never moves, a slower one
+        # buys nothing, and pinning every core of a Pi 3 for minutes is the
+        # kind of load that trips its under-voltage warning.
         cmd = [
             "ffmpeg", "-y", "-loglevel", "error",
             "-loop", "1", "-framerate", "5", "-i", str(png),
             "-t", str(seconds),
-            "-c:v", "libx264", "-preset", "slow", "-tune", "stillimage",
+            "-c:v", "libx264", "-preset", "veryfast", "-threads", "2",
+            "-tune", "stillimage",
             "-crf", "10", "-pix_fmt", "yuv420p", "-profile:v", "high",
             "-r", "5", "-g", "50",
             "-movflags", "+faststart",

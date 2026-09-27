@@ -894,3 +894,84 @@ def test_a_fresh_press_after_holding_to_zero_does_power_off(tmp_path):
     send(app, Action.VOLUME_DOWN)
 
     assert app.powered_off is True
+
+
+# -- "now playing" caption (bottom-right) ----------------------------------------
+# build_app's shows are folders like "dragon/dragon_ep01.mp4", which caption as
+# "Dragon" / "E01".
+
+
+def test_changing_channel_captions_what_is_on(tmp_path):
+    app, player, _ = build_app(tmp_path, transition="none", bridge_seconds=0)
+    app.start()
+
+    send(app, Action.CHANNEL_UP)                 # -> Arthur
+
+    assert "Arthur" in player.overlays[1] and r"\an3" in player.overlays[1]
+
+
+def test_skipping_captions_the_new_episode(tmp_path):
+    app, player, _ = build_app(tmp_path, transition="none", bridge_seconds=0)
+    app.start()
+    first = player.overlays[1]
+
+    send(app, Action.NEXT_EPISODE)
+
+    assert player.overlays[1] != first           # a different episode number
+    assert "Dragon" in player.overlays[1]
+
+
+def test_caption_waits_for_the_cut_over_on_a_bridged_switch(tmp_path):
+    app, player, clock = build_app(tmp_path, bridge_seconds=0.8)
+    app.start()
+    player.overlays.pop(1, None)
+
+    send(app, Action.CHANNEL_UP)
+    assert 1 not in player.overlays              # old show still on screen
+    clock.advance(1.0)
+    app.step()
+
+    # The caption itself (right-aligned), not just the channel name "Arthur".
+    assert r"\an3" in player.overlays[1]
+
+
+def test_info_button_captions_what_is_playing(tmp_path):
+    app, player, _ = build_app(tmp_path)
+    app.start()
+    player.overlays.pop(1, None)
+
+    send(app, Action.INFO)
+
+    assert "Dragon" in player.overlays[1] and r"\an3" in player.overlays[1]
+
+
+def test_no_caption_when_turned_off(tmp_path):
+    app, player, _ = build_app(tmp_path, transition="none", bridge_seconds=0,
+                               ui={"now_playing": False})
+    app.start()
+
+    send(app, Action.CHANNEL_UP)
+
+    assert r"\an3" not in player.overlays[1]
+
+
+def test_the_guide_card_gets_no_caption(tmp_path):
+    """It's a picture of the channel list, not a programme called 'Welcome'."""
+    from nostalgiabox.channel import PlayRequest
+
+    app, _, _ = build_app(tmp_path)
+    channel = app.lineup.current
+    guide = PlayRequest(path=tmp_path / "01-guide" / "welcome.mp4")
+    episode = PlayRequest(path=tmp_path / "dragon" / "dragon_ep01.mp4")
+
+    assert app._caption_for(channel, guide) is None
+    assert app._caption_for(channel, episode) is not None
+
+
+def test_break_clips_get_no_caption(tmp_path):
+    from nostalgiabox.channel import PlayRequest
+
+    app, _, _ = build_app(tmp_path)
+    clip = PlayRequest(path=tmp_path / "breaks" / "snack-time.mp4", is_break=True)
+
+    assert app._caption_for(app.lineup.current, clip) is None

@@ -26,10 +26,12 @@ from .channel import Channel, ChannelLineup, PlayRequest, build_lineup
 from .config import Config
 from .input.keymap import MPV_WINDOW_KEYS, action_from_name
 from .input.manager import InputManager, create_backends
+from .guide_gen import GUIDE_FILENAME
 from .media_watch import MediaWatch
 from .overlay import OverlayManager
 from .player import END_EOF, END_ERROR, MockPlayer, Player
 from .state import save_state
+from .titles import NowPlaying, describe
 from .static_gen import (
     COLORBARS_FILENAME,
     DEFAULT_ASSETS_DIR,
@@ -105,7 +107,8 @@ class TVApp:
         # then cut to the channel that was preloaded. The channel banner is shown
         # at the moment of the cut-over, not when the button is pressed.
         self._switch_deadline: Optional[float] = None
-        self._pending_banner: Optional[tuple[int, str, Optional[str]]] = None
+        # (number, name, show_channel_bug keyword arguments)
+        self._pending_banner: Optional[tuple[int, str, dict]] = None
 
         # Playback-finished events from the player (may arrive on any thread).
         self._ended: "queue.Queue[str]" = queue.Queue()
@@ -234,8 +237,8 @@ class TVApp:
             self.player.commit_switch()
             # Flash the channel banner right as the picture actually changes.
             if self._pending_banner is not None:
-                number, name, subtitle = self._pending_banner
-                self.overlay.show_channel_bug(number, name, subtitle=subtitle)
+                number, name, banner = self._pending_banner
+                self.overlay.show_channel_bug(number, name, **banner)
                 self._pending_banner = None
 
     def _maybe_expire_resume_offer(self, now: float) -> None:
@@ -408,15 +411,16 @@ class TVApp:
         subtitle: Optional[str] = None,
     ) -> None:
         """Put ``request`` on screen, using the configured changeover style."""
+        banner = {"subtitle": subtitle, "caption": self._caption_for(channel, request)}
         if not show_static:
             # Not a channel change (first tune / waking from standby): play now.
             self._switch_deadline = None
-            self.overlay.show_channel_bug(channel.number, channel.name, subtitle=subtitle)
+            self.overlay.show_channel_bug(channel.number, channel.name, **banner)
             self._play_request(request)
         elif self._transition_path is not None:
             # Transition clip (glitch/static) + preloaded episode.
             self._switch_deadline = None
-            self.overlay.show_channel_bug(channel.number, channel.name, subtitle=subtitle)
+            self.overlay.show_channel_bug(channel.number, channel.name, **banner)
             self._playing_path = request.path
             self._playing_is_break = request.is_break
             self.player.play_transition(
@@ -433,10 +437,10 @@ class TVApp:
             self._playing_is_break = request.is_break
             self.player.preload_next(request.path, start=request.start)
             self._switch_deadline = self._clock() + self.config.bridge_seconds
-            self._pending_banner = (channel.number, channel.name, subtitle)
+            self._pending_banner = (channel.number, channel.name, banner)
         else:
             self._switch_deadline = None
-            self.overlay.show_channel_bug(channel.number, channel.name, subtitle=subtitle)
+            self.overlay.show_channel_bug(channel.number, channel.name, **banner)
             self._play_request(request)
 
     def _play_request(self, request: PlayRequest) -> None:
@@ -525,7 +529,20 @@ class TVApp:
     # -- info / standby -----------------------------------------------------
     def _show_info(self) -> None:
         channel = self.lineup.current
-        self.overlay.show_channel_bug(channel.number, channel.name)
+        caption = None
+        if self._playing_path is not None and not self._playing_is_break:
+            caption = self._caption_for(channel, PlayRequest(path=self._playing_path))
+        self.overlay.show_channel_bug(channel.number, channel.name, caption=caption)
+
+    def _caption_for(self, channel: Channel, request: PlayRequest) -> Optional[NowPlaying]:
+        """What to caption the bottom-right with: the show and episode, or the
+        film and year - worked out from the file's name (see titles.py). None
+        for break clips and the guide card, which aren't programmes."""
+        if not self.config.ui.now_playing or request.is_break:
+            return None
+        if request.path.name == GUIDE_FILENAME:
+            return None
+        return describe(request.path, channel.config.path)
 
     def _toggle_standby(self) -> None:
         self.standby = not self.standby

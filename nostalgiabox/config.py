@@ -61,6 +61,7 @@ class UiConfig:
     glow: bool = True               # soft glow around text for that CRT bloom
     logo: bool = True               # corner mark on the channel banner / volume bar
     brand: str = "TIME WARP TV"     # station name, shown on the welcome channel
+    now_playing: bool = True        # caption the show/episode or film/year, bottom-right
 
 
 @dataclass(frozen=True)
@@ -520,6 +521,7 @@ def _parse_ui(raw: Any) -> UiConfig:
         glow=bool(raw.get("glow", defaults.glow)),
         logo=bool(raw.get("logo", defaults.logo)),
         brand=str(raw.get("brand", defaults.brand)),
+        now_playing=bool(raw.get("now_playing", defaults.now_playing)),
     )
 
 

@@ -372,3 +372,43 @@ def test_text_glow_has_a_dark_edge_not_a_green_halo():
 
     assert rf"\3c{_hex_to_ass(ui.dim_color)}" in tags
     assert r"\blur4" not in tags
+
+
+# -- "now playing" caption --------------------------------------------------------
+
+
+def _caption_lines(caption):
+    from nostalgiabox.config import UiConfig
+    from nostalgiabox.overlay import _caption_ass
+
+    return _caption_ass(caption, UiConfig())
+
+
+def test_caption_is_right_aligned_and_sits_on_the_logo():
+    import re
+
+    from nostalgiabox.overlay import _IX1, _LOGO_TOP
+    from nostalgiabox.titles import NowPlaying
+
+    lines = _caption_lines(NowPlaying("Batman Beyond", "S03 E05  Out of the Past"))
+
+    assert len(lines) == 2
+    for line in lines:
+        x, y = map(int, re.search(r"\\pos\((\d+),(\d+)\)", line).groups())
+        assert line.startswith(r"{\an3") and x == _IX1 and y < _LOGO_TOP
+    # the name above the detail
+    ys = [int(re.search(r",(\d+)\)", line).group(1)) for line in lines]
+    assert lines[-1].endswith("Batman Beyond") and ys[-1] < ys[0]
+
+
+def test_caption_without_a_detail_is_one_line():
+    from nostalgiabox.titles import NowPlaying
+
+    assert len(_caption_lines(NowPlaying("Wee Sing Together"))) == 1
+
+
+def test_caption_clears_the_volume_bar():
+    """Vol +/- right after a channel change shows both at once."""
+    from nostalgiabox.overlay import _BAR_ROW_TOP, _LOGO_TOP
+
+    assert _LOGO_TOP < _BAR_ROW_TOP - 62   # caption sits above the logo, so above "Volume"

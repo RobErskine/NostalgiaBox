@@ -153,6 +153,11 @@ ui:
   # The guide card's header is the logo + wordmark (assets/wordmark.svg). Set a
   # different name here and it's typed out in the header instead.
   brand: "TIME WARP TV"
+  # When you change channel, skip an episode or press Info, caption what's on
+  # in the bottom-right: "Batman Beyond / S03 E05 Out of the Past", or a film's
+  # title and year. Worked out from the file and folder names - Plex-style names
+  # like "Title (1999).mp4" and "Show S01E05 Title.mkv" come out best.
+  now_playing: true
 
 # --- CRT picture effect (for 4:3 shows on a flat TV) -------------------------
 # Bends the picture like a tube TV: a gentle bulge, rounded corners, a vignette

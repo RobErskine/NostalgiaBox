@@ -21,6 +21,7 @@ from typing import Callable, Dict, Optional
 
 from . import brand as brand_art
 from .config import Config, UiConfig
+from .titles import NowPlaying
 from .player import Player
 
 # Virtual canvas the overlays are laid out on. This maps to the WHOLE display
@@ -83,15 +84,16 @@ class OverlayManager:
         name: str,
         *,
         subtitle: Optional[str] = None,
+        caption: Optional[NowPlaying] = None,
         duration: Optional[float] = None,
     ) -> None:
         """Flash the channel number + name, like changing channels on a cable box.
 
         ``subtitle`` adds a small third line (used for the "RESUMING - PRESS OK
-        TO START OVER" banner).
+        TO START OVER" banner). ``caption`` names what's playing, bottom-right.
         """
         dur = self._config.channel_bug_seconds if duration is None else duration
-        ass = _channel_bug_ass(number, name, self._ui, subtitle=subtitle)
+        ass = _channel_bug_ass(number, name, self._ui, subtitle=subtitle, caption=caption)
         self._player.set_overlay(_ID_CHANNEL, ass, CANVAS_W, CANVAS_H)
         self._arm(_ID_CHANNEL, dur)
 
@@ -188,7 +190,12 @@ def _style(ui: UiConfig, *, size: int, alpha: int = 0) -> str:
 # ASS builders (free functions so they are easy to unit test)
 # --------------------------------------------------------------------------
 def _channel_bug_ass(
-    number: int, name: str, ui: UiConfig, *, subtitle: Optional[str] = None
+    number: int,
+    name: str,
+    ui: UiConfig,
+    *,
+    subtitle: Optional[str] = None,
+    caption: Optional[NowPlaying] = None,
 ) -> str:
     """Green digital 'CH 03' + show name, flashed inside the top-right of the frame."""
     num = f"{number:02d}"
@@ -205,7 +212,33 @@ def _channel_bug_ass(
         )
     if ui.logo and (logo := _logo_ass(ui)):
         lines.append(logo)
+    if caption is not None and caption.title:
+        lines.extend(_caption_ass(caption, ui))
     return "\n".join(lines)
+
+
+# The "now playing" caption: bottom-right, right-aligned, stacked just above
+# the corner logo - clear of the volume bar below and the banner above.
+_CAPTION_TITLE_SIZE = 40
+_CAPTION_DETAIL_SIZE = 30
+_CAPTION_GAP = 8                        # between the caption and the logo
+
+
+def _caption_ass(caption: NowPlaying, ui: UiConfig) -> list:
+    """The show (or film) name, with the episode (or year) on a line below."""
+    lines = []
+    bottom = _LOGO_TOP - _CAPTION_GAP  # sits on the logo, whatever size it is
+    if caption.detail:
+        lines.append(
+            rf"{{\an3\pos({_IX1},{bottom}){_style(ui, size=_CAPTION_DETAIL_SIZE)}}}"
+            f"{_escape(caption.detail)}"
+        )
+        bottom -= _CAPTION_DETAIL_SIZE + 6
+    lines.append(
+        rf"{{\an3\pos({_IX1},{bottom}){_style(ui, size=_CAPTION_TITLE_SIZE)}}}"
+        f"{_escape(caption.title)}"
+    )
+    return lines
 
 
 def _volume_ass(level: int, muted: bool, ui: UiConfig) -> str:

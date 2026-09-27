@@ -476,7 +476,7 @@ channel" in Part F) so channel 1 lists it.
 | Something else on this channel | ▶ (next episode) / ◀ (back to the last one) |
 | Adjust volume | Vol + / Vol − |
 | Mute | Mute |
-| See what's playing | Menu / Info |
+| See what's playing | Menu / Info — the show and episode (or film and year) appear bottom-right |
 | Back to the channel guide | Home |
 | Back to the last channel watched | Back |
 | Jump to a channel | Type the number, then OK (needs a number pad) |
