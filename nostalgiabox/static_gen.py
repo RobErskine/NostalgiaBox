@@ -159,7 +159,7 @@ def generate_all(assets_dir: Path, *, force: bool = False) -> List[Path]:
 
 
 def main(argv: List[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Generate NostalgiaBox filler assets.")
+    parser = argparse.ArgumentParser(description="Generate TimewarpTV filler assets.")
     parser.add_argument(
         "--assets-dir",
         type=Path,

@@ -69,7 +69,7 @@ def create_backends(options: Optional[Dict] = None) -> List[InputBackend]:
         keyboard_name_filter: "remote"
         keyboard_grab: false
         cec_binary: cec-client
-        cec_osd_name: NostalgiaBox
+        cec_osd_name: TimewarpTV
 
     Backends that are requested but unavailable on this machine are quietly
     skipped, so the same config works on the Pi and on a dev laptop.
@@ -106,7 +106,7 @@ def create_backends(options: Optional[Dict] = None) -> List[InputBackend]:
             backends.append(
                 CecBackend(
                     binary=binary,
-                    osd_name=options.get("cec_osd_name", "NostalgiaBox"),
+                    osd_name=options.get("cec_osd_name", "TimewarpTV"),
                 )
             )
         else:

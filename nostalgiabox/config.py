@@ -135,7 +135,7 @@ class ChannelConfig:
 
 @dataclass(frozen=True)
 class Config:
-    """Top-level configuration for the whole nostalgia box."""
+    """Top-level configuration for the whole TV."""
 
     channels: List[ChannelConfig]
     video_extensions: tuple[str, ...] = DEFAULT_VIDEO_EXTENSIONS

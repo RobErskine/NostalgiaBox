@@ -190,7 +190,7 @@ class TVApp:
         """Run the blocking main loop until a QUIT action is received."""
         self.start()
         self._running = True
-        log.info("NostalgiaBox is on the air. %d channels.", len(self.lineup))
+        log.info("TimewarpTV is on the air. %d channels.", len(self.lineup))
         try:
             while self._running:
                 # Faster while something is animating (the standby screensaver).

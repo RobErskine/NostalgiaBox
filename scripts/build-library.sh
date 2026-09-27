@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Build the NostalgiaBox drive from a Plex-style library (one folder per show /
+# Build the TimewarpTV drive from a Plex-style library (one folder per show /
 # movie), reorganised into one folder per channel as listed in
 # scripts/library.tsv.
 #

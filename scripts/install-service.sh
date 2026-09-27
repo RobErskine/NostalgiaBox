@@ -81,7 +81,7 @@ rm -f "${fstab_new}"
 # plugged in while the Pi is already on.
 echo "==> Installing udev rule ${UDEV_RULE} (mount on plug-in)"
 sudo tee "${UDEV_RULE}" > /dev/null <<EOF
-# NostalgiaBox: mount the media drive whenever it is plugged in.
+# TimewarpTV: mount the media drive whenever it is plugged in.
 ACTION=="add", SUBSYSTEM=="block", ENV{ID_FS_LABEL}=="${DRIVE_LABEL}", ENV{SYSTEMD_WANTS}+="${MOUNT_UNIT}"
 EOF
 sudo udevadm control --reload-rules

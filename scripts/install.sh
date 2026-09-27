@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# NostalgiaBox installer for Raspberry Pi OS (Bookworm) / Debian-based systems.
+# TimewarpTV installer for Raspberry Pi OS (Bookworm) / Debian-based systems.
 #
 # Installs system + Python dependencies, generates the filler assets, and
 # optionally installs a systemd service so the box boots straight into "TV mode".
@@ -35,7 +35,7 @@ python3 -m venv --system-site-packages "${REPO_DIR}/.venv"
 # shellcheck source=/dev/null
 source "${REPO_DIR}/.venv/bin/activate"
 
-echo "==> Installing NostalgiaBox and Python dependencies"
+echo "==> Installing TimewarpTV and Python dependencies"
 pip install --upgrade pip
 # Editable install so that a plain `git pull` picks up code updates without
 # needing to reinstall (just restart the service afterwards).
@@ -45,7 +45,7 @@ echo "==> Generating filler assets (static + colour bars)"
 python -m nostalgiabox.static_gen || echo "   (asset generation skipped/failed - box still works)"
 
 echo "==> Installing the retro OSD font (VT323)"
-# NostalgiaBox also copies this into mpv's font dir at runtime, but installing it
+# TimewarpTV also copies this into mpv's font dir at runtime, but installing it
 # system-wide makes it available everywhere (and to fontconfig).
 mkdir -p "${HOME}/.local/share/fonts" "${HOME}/.config/mpv/fonts"
 if compgen -G "${REPO_DIR}/nostalgiabox/assets/fonts/*.ttf" > /dev/null; then
@@ -85,5 +85,5 @@ Next steps:
   3. Check what it found:
          nostalgiabox --check --config /media/nostalgiabox/config.yaml
 
-Enjoy your nostalgia box!
+Enjoy TimewarpTV!
 EOF

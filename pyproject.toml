@@ -5,11 +5,11 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "nostalgiabox"
 version = "1.0.0"
-description = "A retro TV media player for a Raspberry Pi 'nostalgia box' - fixed channels, shuffled episodes, and an authentic early-2000s television experience."
+description = "TimewarpTV: a retro TV for a Raspberry Pi - fixed channels, shuffled episodes, and an authentic early-2000s television experience."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
-authors = [{ name = "NostalgiaBox" }]
+authors = [{ name = "TimewarpTV" }]
 keywords = ["raspberry-pi", "media-player", "retro-tv", "mpv", "nostalgia", "kids"]
 
 # Core runtime dependency. The hardware-specific dependencies (python-mpv,

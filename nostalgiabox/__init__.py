@@ -1,6 +1,6 @@
-"""NostalgiaBox - a retro TV media player for a Raspberry Pi nostalgia box.
+"""TimewarpTV - a retro TV media player for a Raspberry Pi.
 
-NostalgiaBox turns a Raspberry Pi 4 into an early-2000s style television. It
+TimewarpTV turns a Raspberry Pi into an early-2000s style television. It
 presents a fixed set of "channels" (each backed by a folder of episodes),
 plays them on a continuous randomized shuffle, and drives the whole thing from
 a remote control with authentic touches like a channel banner, an on-screen

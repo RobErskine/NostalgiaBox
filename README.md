@@ -1,8 +1,10 @@
-# NostalgiaBox
+# TimewarpTV
 
 **Turn a Raspberry Pi into a retro TV for your kids.**
 
-NostalgiaBox plays folders of old children's shows off an SD card as if they were
+*Built on [NostalgiaBox](https://github.com/landonbtw/NostalgiaBox) — see [Credits](#credits).*
+
+TimewarpTV plays folders of old children's shows off an SD card as if they were
 real TV **channels**. Flip to a channel and a show is already playing (starting a
 few seconds in, like you just tuned in); when an episode ends, the next one rolls
 automatically on an endless shuffle. It boots straight to the TV on power-up, is
@@ -159,7 +161,7 @@ You're "inside" the Pi when the prompt changes to something like
 > If `nostalgiabox.local` doesn't resolve, find the Pi's IP address from your
 > router and use `ssh pi@THAT.IP.ADDRESS` instead.
 
-### Part D — Install NostalgiaBox
+### Part D — Install TimewarpTV
 
 Install git (if needed), download the project, and run the installer:
 
@@ -291,7 +293,7 @@ the card is a picture, so it won't update by itself.
 ### Part G — Program the remote (Flirc)
 
 > **Before buying a Flirc, try HDMI-CEC — it's free.** If the TV supports it
-> (most since ~2010: Anynet+, SimpLink, BRAVIA Sync, …), NostalgiaBox can read
+> (most since ~2010: Anynet+, SimpLink, BRAVIA Sync, …), TimewarpTV can read
 > button presses from the TV's own remote straight over the HDMI cable, no
 > extra hardware. Install `cec-utils` (`sudo apt install cec-utils`, already
 > done if you ran `install.sh`) and make sure `cec: true` is set under `input:`
@@ -301,7 +303,7 @@ the card is a picture, so it won't update by itself.
 > doesn't work with your TV, and both can be enabled at once.
 
 The **Flirc** adapter learns your Simple TV Remote and turns its buttons into
-keys NostalgiaBox understands. Do this **on your computer**:
+keys TimewarpTV understands. Do this **on your computer**:
 
 1. Unplug the Flirc from the Pi and plug it into your computer.
 
@@ -451,7 +453,7 @@ Kids will unplug it. Two things keep the SD card from getting corrupted:
   after everything else works — to update or change settings on the Pi later,
   disable the overlay the same way, reboot, update, and re-enable it.
 
-**Done!** Plug it in and enjoy your nostalgia box.
+**Done!** Plug it in and enjoy TimewarpTV.
 
 ---
 
@@ -643,19 +645,36 @@ python -m nostalgiabox --dry-run --config config.yaml   # keyboard-controlled, n
 ```
 
 ```
-nostalgiabox/
+nostalgiabox/           (the package keeps its original name - see Credits)
 ├── config.py      YAML -> validated config
 ├── playlist.py    the shuffle bag (each episode once, then reshuffle)
-├── channel.py     folder scanning, tune-in modes, locks, breaks, navigation
+├── channel.py     folder scanning, tune-in modes, skip history, locks, breaks
 ├── state.py       resume-position persistence (survives a power cut)
-├── player.py      mpv player (+ a mock for tests)
-├── overlay.py     the green on-screen display
+├── player.py      mpv player (+ a mock for tests), CRT auto-off for HD
+├── overlay.py     the green on-screen display, lock screen, standby
+├── brand.py       the logo and wordmark, drawn from their SVGs
+├── titles.py      "now playing" captions from file and folder names
+├── screensaver.py the bouncing-logo standby screensaver
+├── guide_gen.py   renders the channel-1 guide card
+├── media_watch.py re-scans when the drive is unplugged or its config changes
 ├── crt.py         the CRT shader
 ├── input/         remote input (Flirc/keyboard, HDMI-CEC, keymap)
 ├── static_gen.py  ffmpeg-generated static/glitch/colour-bar clips
 └── app.py         the TV state machine
 ```
 
+## Credits
+
+TimewarpTV began as a fork of **[NostalgiaBox](https://github.com/landonbtw/NostalgiaBox)**
+by [landonbtw](https://github.com/landonbtw) — the retro-TV player for a
+Raspberry Pi that it's built on: the channels, the shuffle, the channel banner
+and volume bar, the CRT look. Thank you.
+
+You'll still see the original name in a few technical places, kept on purpose
+because an installed box depends on them: the `nostalgiabox` command and Python
+package, the `nostalgiabox` service, the `/media/nostalgiabox` mount point, and
+this repository's address.
+
 ## License
 
-MIT. Enjoy your nostalgia box!
+MIT (see [LICENSE](LICENSE)), as NostalgiaBox before it. Enjoy TimewarpTV!

@@ -36,7 +36,7 @@ if ! command -v ffmpeg >/dev/null 2>&1; then
   exit 1
 fi
 if [[ ! -f "$FONT" ]]; then
-  echo "error: bundled font not found at $FONT (is this run from a checkout of NostalgiaBox?)" >&2
+  echo "error: bundled font not found at $FONT (is this run from a checkout of TimewarpTV?)" >&2
   exit 1
 fi
 
@@ -46,7 +46,7 @@ fi
 # the label as a transparent PNG with Python/Pillow (using the same bundled
 # font) and compositing it with ffmpeg's 'overlay' filter instead, which needs
 # no font-rendering library. If even that isn't available, skip the on-screen
-# text - NostalgiaBox's own channel banner still shows what's playing, so
+# text - TimewarpTV's own channel banner still shows what's playing, so
 # labels are cosmetic either way.
 HAVE_DRAWTEXT=1
 if ! ffmpeg -hide_banner -filters 2>/dev/null | grep -qi '\bdrawtext\b'; then
@@ -68,7 +68,7 @@ if [[ "$HAVE_DRAWTEXT" -eq 0 ]]; then
     echo "         Pillow + ffmpeg's 'overlay' filter instead (a bit slower, same result)." >&2
   else
     echo "warning: this ffmpeg has no 'drawtext' filter, and Pillow could not be installed" >&2
-    echo "         (pip install pillow) - clips will have no on-screen text. NostalgiaBox's" >&2
+    echo "         (pip install pillow) - clips will have no on-screen text. TimewarpTV's" >&2
     echo "         own channel banner still shows what's playing, so this is cosmetic." >&2
   fi
 fi

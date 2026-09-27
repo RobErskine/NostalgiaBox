@@ -47,7 +47,7 @@ def _cmd_check(config: Config) -> int:
         return 2
 
     lineup = build_lineup(config)
-    print(f"NostalgiaBox v{__version__} - configuration OK")
+    print(f"TimewarpTV v{__version__} - configuration OK")
     print(f"tune-in mode: {config.tune_in}")
     if overrides:
         print(f"key overrides: {len(overrides)} configured")
@@ -98,7 +98,7 @@ def _list_audio_devices() -> int:
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         prog="nostalgiabox",
-        description="A retro TV media player for a Raspberry Pi nostalgia box.",
+        description="TimewarpTV - a retro TV media player for a Raspberry Pi.",
     )
     parser.add_argument("-c", "--config", help="path to the YAML config file")
     parser.add_argument(

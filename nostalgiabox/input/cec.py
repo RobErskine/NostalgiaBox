@@ -33,7 +33,7 @@ class CecBackend(InputBackend):
         self,
         *,
         binary: str = "cec-client",
-        osd_name: str = "NostalgiaBox",
+        osd_name: str = "TimewarpTV",
         extra_args: Optional[List[str]] = None,
     ) -> None:
         super().__init__()

@@ -1,4 +1,4 @@
-# systemd unit template for NostalgiaBox.
+# systemd unit template for TimewarpTV.
 #
 # This is a TEMPLATE - scripts/install-service.sh fills in the real user, group,
 # home and paths and installs it to /etc/systemd/system/nostalgiabox.service.
@@ -17,7 +17,7 @@
 #   * config edited     - same: exit, restart, fresh scan
 
 [Unit]
-Description=NostalgiaBox retro TV
+Description=TimewarpTV retro TV
 After=multi-user.target sound.target __MEDIA_MOUNT_UNIT__
 # Wants, not Requires: a missing drive must not stop the TV from starting.
 Wants=__MEDIA_MOUNT_UNIT__

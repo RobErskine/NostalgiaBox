@@ -9,7 +9,7 @@ dist/
 .venv/
 venv/
 
-# NostalgiaBox
+# TimewarpTV
 # Each install has its own config (the installer creates it from
 # config.example.yaml). Keep personal configs out of the repo.
 config.yaml
