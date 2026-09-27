@@ -97,7 +97,9 @@ sed \
   -e "s|__MEDIA_PATH__|${MEDIA_PATH}|g" \
   -e "s|__MEDIA_MOUNT_UNIT__|${MOUNT_UNIT}|g" \
   "${TEMPLATE}" > "${tmp}"
-sudo cp "${tmp}" "${TARGET}"
+# install, not cp: mktemp files are private (0600), and a unit file should be
+# world-readable (0644) so `systemctl cat` works for anyone.
+sudo install -m 0644 "${tmp}" "${TARGET}"
 rm -f "${tmp}"
 
 echo "==> Allowing '${RUN_USER}' to power off without a password (for the"

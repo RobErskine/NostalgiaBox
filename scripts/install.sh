@@ -54,14 +54,18 @@ if compgen -G "${REPO_DIR}/nostalgiabox/assets/fonts/*.ttf" > /dev/null; then
   command -v fc-cache > /dev/null && fc-cache -f "${HOME}/.local/share/fonts" || true
 fi
 
-if [[ ! -f "${REPO_DIR}/config.yaml" ]]; then
-  echo "==> Creating a starter config.yaml (edit it to point at your shows!)"
-  cp "${REPO_DIR}/config.example.yaml" "${REPO_DIR}/config.yaml"
+# The config lives on the media drive, not here (see README, Part E). Check it
+# if the drive is already mounted; otherwise say so rather than validating a
+# sample config whose example folders can't exist.
+DRIVE_CONFIG="/media/nostalgiabox/config.yaml"
+if [[ -f "${DRIVE_CONFIG}" ]]; then
+  echo "==> Checking the library on the drive"
+  nostalgiabox --check --config "${DRIVE_CONFIG}" || \
+    echo "   (fix ${DRIVE_CONFIG}, then re-run the check below)"
+else
+  echo "==> Skipping the library check: the media drive isn't mounted yet"
+  echo "    (install-service.sh mounts it - then run the check below)"
 fi
-
-echo "==> Validating configuration"
-nostalgiabox --check --config "${REPO_DIR}/config.yaml" || \
-  echo "   (fix config.yaml, then re-run: nostalgiabox --check)"
 
 if [[ "${INSTALL_SERVICE}" -eq 1 ]]; then
   echo "==> Installing systemd service"

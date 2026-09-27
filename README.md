@@ -166,14 +166,14 @@ Install git (if needed), download the project, and run the installer:
 ```bash
 sudo apt update
 sudo apt install -y git
-git clone https://github.com/landonbtw/NostalgiaBox.git
-cd NostalgiaBox
+git clone https://github.com/RobErskine/NostalgiaBox.git ~/NostalgiaBox
+cd ~/NostalgiaBox
 ./scripts/install.sh
 ```
 
 The installer sets up everything: the media player (mpv), video tools (ffmpeg),
-the retro font, and all dependencies. It takes a few minutes. Say `y` if it asks
-to continue. It's done when you see **"==> Done!"**.
+the retro font, and all dependencies. It takes a few minutes (10–20 on a Pi 3).
+Say `y` if it asks to continue. It's done when you see **"==> Done!"**.
 
 ### Part E — Load your shows
 
