@@ -333,7 +333,7 @@ keys NostalgiaBox understands. Do this **on your computer**:
    | **Home**                     | Home                   | Jump to the guide channel |
    | **Back**                     | Backspace              | Jump to the last channel watched |
    | **Menu** (the ☰ "listing" button) | `i`               | Show what's playing now |
-   | **Power**                    | `p`                    | Standby (blank the screen) |
+   | **Power**                    | `p`                    | Standby (a drifting-logo screensaver) |
 
    **Why `,` and `.` rather than the arrow keys for ◀ ▶?** The left/right
    arrows are volume for everything else — including your TV's own remote over
@@ -481,7 +481,7 @@ channel" in Part F) so channel 1 lists it.
 | Back to the last channel watched | Back |
 | Jump to a channel | Type the number, then OK (needs a number pad) |
 | Unlock a locked channel | ◀ / ▶ pick each digit, OK for the next |
-| Standby (blank screen) | Power |
+| Standby — the logo drifts and bounces, so nothing burns into the TV | Power |
 | **Turn off** (safe to unplug) | At volume 0, let go, then press Vol − once more |
 
 Turn it on by plugging in power; it boots back to a channel automatically.
