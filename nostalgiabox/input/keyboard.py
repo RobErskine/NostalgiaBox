@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import select
+import time
 from typing import Dict, List, Optional, Sequence
 
 from ..actions import InputEvent
@@ -18,6 +19,9 @@ from .base import InputBackend
 from .keymap import evdev_key_to_event
 
 log = logging.getLogger(__name__)
+
+# How often to look for remotes/keyboards plugged in since start-up.
+RESCAN_SECONDS = 2.0
 
 # Key-event values reported by evdev: 0=up, 1=down, 2=autorepeat.
 _KEY_DOWN = 1
@@ -46,6 +50,7 @@ class KeyboardBackend(InputBackend):
         # Per-key action overrides from config (key name -> InputEvent or None).
         self._overrides = dict(overrides or {})
         self._devices: List = []
+        self._warned: set = set()  # paths already warned about, so rescans stay quiet
 
     def _lookup(self, key_name: str) -> Optional[InputEvent]:
         """Config overrides win over the built-in defaults."""
@@ -61,17 +66,22 @@ class KeyboardBackend(InputBackend):
             return False
         return True
 
-    def _open_devices(self):
+    def _open_devices(self, skip: frozenset = frozenset()):
+        """Open every usable key-sending device not already open (``skip``)."""
         import evdev
         from evdev import ecodes
 
         paths = self._device_paths or evdev.list_devices()
         devices = []
         for path in paths:
+            if path in skip:
+                continue
             try:
                 dev = evdev.InputDevice(path)
             except (OSError, PermissionError) as exc:
-                log.warning("cannot open input device %s: %s", path, exc)
+                if path not in self._warned:
+                    log.warning("cannot open input device %s: %s", path, exc)
+                    self._warned.add(path)
                 continue
             caps = dev.capabilities()
             if ecodes.EV_KEY not in caps:
@@ -93,19 +103,40 @@ class KeyboardBackend(InputBackend):
         if not self.is_available():
             log.error("evdev is not installed; keyboard/remote input disabled")
             return
-        self._devices = self._open_devices()
-        if not self._devices:
-            log.warning("no usable input devices found for the keyboard backend")
-            return
-
         from evdev import ecodes
 
-        fd_to_device = {dev.fd: dev for dev in self._devices}
+        # Devices are looked for again every couple of seconds, not just at
+        # start-up: a remote receiver plugged in after the box is on, pulled out
+        # and put back, or reset by a USB brown-out must start working again by
+        # itself - otherwise the remote is dead until the next reboot.
+        fd_to_device: Dict = {}
+        next_scan = 0.0
+        waiting_logged = False
         while not self.stopping:
+            now = time.monotonic()
+            if now >= next_scan:
+                known = frozenset(getattr(d, "path", None) for d in fd_to_device.values())
+                for dev in self._open_devices(skip=known):
+                    fd_to_device[dev.fd] = dev
+                self._devices = list(fd_to_device.values())
+                next_scan = now + RESCAN_SECONDS
+                if not fd_to_device and not waiting_logged:
+                    log.warning("no remote or keyboard found yet; will keep looking")
+                    waiting_logged = True
+                elif fd_to_device:
+                    waiting_logged = False
+            if not fd_to_device:
+                self._stop.wait(0.5)
+                continue
             try:
-                r, _, _ = select.select(fd_to_device, [], [], 0.5)
+                r, _, _ = select.select(list(fd_to_device), [], [], 0.5)
             except (OSError, ValueError):
-                break
+                # A device vanished between the scan and the select; drop any
+                # that are no longer readable and carry on.
+                for fd, dev in list(fd_to_device.items()):
+                    if getattr(dev, "fd", -1) < 0:
+                        fd_to_device.pop(fd, None)
+                continue
             for fd in r:
                 dev = fd_to_device.get(fd)
                 if dev is None:
@@ -118,6 +149,10 @@ class KeyboardBackend(InputBackend):
                 except OSError:
                     log.warning("input device %s disappeared", getattr(dev, "path", "?"))
                     fd_to_device.pop(fd, None)
+                    try:
+                        dev.close()
+                    except Exception:  # noqa: BLE001
+                        pass
 
     def _handle_key_event(self, event) -> None:
         from evdev import ecodes
