@@ -12,6 +12,36 @@ driven by a simple remote, sends audio over HDMI, and has an authentic
 early-2000s vibe — a green on-screen channel banner and volume bar, and a curved
 "CRT" picture. No menus, no apps, no touchscreens. Just a remote and channels.
 
+## What it looks like
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/channel-change.jpg" alt="Changing to channel 7: the green CH 07 banner top-right, 'Big Buck Bunny 2008' captioned bottom-right above the Time Warp TV logo, on a curved CRT picture"></td>
+    <td width="50%"><img src="docs/screenshots/guide.png" alt="The channel-1 guide card: the Time Warp TV logo and wordmark over a green list of channels 1 to 10, with remote hints at the bottom"></td>
+  </tr>
+  <tr>
+    <td><b>Flip to a channel</b> — the channel banner, what's playing (show and episode, or film and year), and the curved "CRT" picture.</td>
+    <td><b>Channel 1, the guide</b> — every channel and how to work the remote, on a card the box draws itself.</td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/volume.jpg" alt="The volume bar: solid green bars for the level, dots for the rest"></td>
+    <td><img src="docs/screenshots/lock.jpg" alt="A locked channel's combination lock: four boxes, two digits entered as stars, the third showing 7 in solid green"></td>
+  </tr>
+  <tr>
+    <td><b>Volume</b> — the classic bar-and-dots readout.</td>
+    <td><b>Locked channels</b> — a combination lock you dial with ◀ ▶ and OK, no number pad needed.</td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/standby.png" alt="Standby: the Time Warp TV logo drifting on a black screen, the wordmark in the top-left corner"></td>
+    <td><b>Standby</b> — the logo drifts and bounces around the screen and the wordmark changes corner every minute, so nothing burns into the TV. The box goes here by itself after 10 minutes on a still screen.</td>
+  </tr>
+</table>
+
+<sub>These are real frames from the player, overlays and all — regenerate them with
+`scripts/make-screenshots.py`. Footage: <i>Big Buck Bunny</i> © Blender Foundation,
+<a href="https://creativecommons.org/licenses/by/3.0/">CC BY 3.0</a>,
+<a href="https://peach.blender.org/">peach.blender.org</a>.</sub>
+
 This guide has three parts:
 
 1. [**Try it on your computer first**](#0-try-it-on-your-computer-first-no-pi-needed) — see every feature working before buying anything

@@ -238,9 +238,12 @@ if [[ "$WITH_BUNNY" -eq 1 ]]; then
   else
     echo "==> Downloading Big Buck Bunny (real long-form video, for a genuine decode/resume test)"
     mkdir -p "$(dirname "$BUNNY_OUT")"
-    curl -L --progress-bar \
-      "https://download.blender.org/peach/bigbuckbunny_movies/BigBuckBunny_320x180.mp4" \
-      -o "$BUNNY_OUT"
+    # From the Internet Archive: download.blender.org now answers scripted
+    # downloads with a bot-check page. --fail so an error page is never saved
+    # as "Big Buck Bunny.mp4" (it would sit in the library as a broken episode).
+    curl -L --fail --progress-bar -A "TimewarpTV-dev/1.0" \
+      "https://archive.org/download/BigBuckBunny_124/Content/big_buck_bunny_720p_surround.mp4" \
+      -o "$BUNNY_OUT" || { rm -f "$BUNNY_OUT"; echo "warning: Big Buck Bunny download failed - skipped" >&2; }
   fi
 fi
 
