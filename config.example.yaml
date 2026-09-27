@@ -71,8 +71,8 @@ channels:
     path: /media/nostalgiabox/adult-swim
     # Gate a channel behind a 4-digit-style code (digits only, 1-8 chars) -
     # this is a kid gate, not real security; the code is stored in plain text.
-    # It stays unlocked for the rest of the session; standby/power-off re-locks
-    # every gated channel automatically.
+    # It stays unlocked only while you're on it: change channel and it locks
+    # again (as does standby/power-off), so coming back asks for the code.
     passcode: "1997"
     locked_message: "ADULT SWIM - LIVE AT 9PM"
   - number: 10

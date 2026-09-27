@@ -374,8 +374,16 @@ class TVApp:
         """Tune into the currently selected channel."""
         channel = self.lineup.current
         self.overlay.clear_standby()
+        # Whatever was up in the middle of the screen belonged to the channel
+        # we're leaving - above all a lock screen, which never times out.
+        self.overlay.clear_message()
         self._code_buffer = None
         self._resume_offer_until = None
+        # Only the channel on screen can be unlocked: leaving a locked channel
+        # locks it again, so coming back always asks for the code.
+        for other in self.lineup:
+            if other is not channel:
+                other.relock()
 
         request = channel.tune_in()
         self._pending_banner = None

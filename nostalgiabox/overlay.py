@@ -142,6 +142,11 @@ class OverlayManager:
         self._player.set_overlay(_ID_MESSAGE, ass, CANVAS_W, CANVAS_H)
         self._expiry.pop(_ID_MESSAGE, None)
 
+    def clear_message(self) -> None:
+        """Take down the centre message or lock screen, if one is up."""
+        self._player.clear_overlay(_ID_MESSAGE)
+        self._expiry.pop(_ID_MESSAGE, None)
+
     def show_standby(self) -> None:
         """Start the standby screensaver: the logo drifting and bouncing around
         the screen, the wordmark hopping between corners. Animated by tick()."""

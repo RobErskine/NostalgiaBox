@@ -1070,3 +1070,64 @@ def test_zero_minutes_turns_the_guard_off(tmp_path):
     _idle(app, clock, 60)
 
     assert not app.standby
+
+
+# -- leaving a locked channel ----------------------------------------------------
+# build_locked_app: channel 2 open, channel 9 locked with 1997.
+
+
+def test_leaving_a_locked_channel_takes_the_keypad_off_screen(tmp_path):
+    app, player, clock = build_locked_app(tmp_path)
+    app.start()
+    send(app, Action.CHANNEL_UP)                    # 2 -> 9, locked
+    assert 4 in player.overlays                     # the keypad is up
+
+    send(app, Action.CHANNEL_UP)                    # 9 -> 2, open
+    clock.advance(5)
+    app.step()
+
+    assert app.lineup.current.number == 2
+    assert 4 not in player.overlays                 # ...and gone
+
+
+def test_an_unlocked_channel_locks_again_once_you_leave_it(tmp_path):
+    app, player, _ = build_locked_app(tmp_path)
+    app.start()
+    send(app, Action.CHANNEL_UP)                    # to 9
+    for digit in (1, 9, 9, 7):
+        send(app, Action.DIGIT, digit)
+    assert app.lineup.current.locked is False
+
+    send(app, Action.CHANNEL_UP)                    # away to 2
+    send(app, Action.CHANNEL_DOWN)                  # back to 9
+
+    assert app.lineup.current.number == 9
+    assert app.lineup.current.locked is True        # code needed again
+    assert "ENTER CODE" in player.overlays[4]
+
+
+def test_back_button_also_relocks(tmp_path):
+    app, _, _ = build_locked_app(tmp_path)
+    app.start()
+    send(app, Action.CHANNEL_UP)
+    for digit in (1, 9, 9, 7):
+        send(app, Action.DIGIT, digit)
+
+    send(app, Action.LAST_CHANNEL)                  # 9 -> 2
+    send(app, Action.LAST_CHANNEL)                  # 2 -> 9
+
+    assert app.lineup.current.locked is True
+
+
+def test_staying_on_an_unlocked_channel_keeps_it_unlocked(tmp_path):
+    app, _, _ = build_locked_app(tmp_path)
+    app.start()
+    send(app, Action.CHANNEL_UP)
+    for digit in (1, 9, 9, 7):
+        send(app, Action.DIGIT, digit)
+
+    send(app, Action.VOLUME_UP)
+    send(app, Action.INFO)
+    send(app, Action.NEXT_EPISODE)                  # a new episode, same channel
+
+    assert app.lineup.current.locked is False

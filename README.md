@@ -360,7 +360,7 @@ keys TimewarpTV understands. Do this **on your computer**:
    |-------------------------|--------------------------|------|
    | **▲ / ▼** (D-pad up/down)    | Up arrow / Down arrow  | Channel up / down |
    | **◀ / ▶** (D-pad left/right) | `,` / `.`              | Previous / next episode on this channel |
-   | **OK**                       | Enter                  | Confirm a typed channel / passcode |
+   | **OK**                       | Enter                  | Next digit on a lock screen; "start over" on a resumed film. **Needed to unlock channels.** |
    | **Vol + / Vol −**            | `=` / `-`              | Volume up / down |
    | **Home**                     | Home                   | Jump to the guide channel |
    | **Back**                     | Backspace              | Jump to the last channel watched |
@@ -588,8 +588,9 @@ tuning to it shows a lock screen instead of playing anything:
     locked_message: "ADULT SWIM - LIVE AT 9PM"
 ```
 
-Typing the code unlocks it for the rest of the session. Standby and power-off
-re-lock every gated channel automatically. This is a kid gate, not real
+Entering the code unlocks it for as long as you stay on it: change channel and
+it locks again, so coming back always asks for the code (standby and power-off
+lock everything too). This is a kid gate, not real
 security - the code lives in plain text in `config.yaml`.
 
 ### Resume, and per-channel playback settings
