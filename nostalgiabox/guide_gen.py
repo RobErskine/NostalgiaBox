@@ -2,35 +2,41 @@
 
 Channel 1 is a "welcome channel", the way a hotel TV has one: tune to it and it
 tells you what else is on. The running box has no concept of such a channel -
-it is an ordinary channel folder holding one very boring episode, produced here
-and copied onto the media drive.
+it is an ordinary channel folder holding one very boring episode, produced here.
 
 Why a video file rather than something the app draws live: a channel is a
 folder of episodes, and keeping it that way means the welcome screen needs no
 new state, no new code path, and cannot break playback. The cost is that the
 card has to be regenerated when the line-up changes - which is what this module
-is for::
+is for. It runs headless, so it works on the Pi itself as well as a desktop::
 
-    python -m nostalgiabox.guide_gen --config config.yaml \\
-        --out /Volumes/WARPMEDIA/01-guide/welcome.mp4
+    python -m nostalgiabox.guide_gen --config /media/nostalgiabox/config.yaml \\
+        --out /media/nostalgiabox/01-guide/welcome.mp4
 
-The card itself is drawn by :func:`nostalgiabox.overlay.guide_ass`, so it uses
-the same font, phosphor green and glow as the channel banner and volume bar.
-Rendering goes through mpv rather than ffmpeg's ``drawtext`` because libass is
-what draws every other readout (and because a stock Homebrew ffmpeg is built
-without freetype, so ``drawtext`` is often missing entirely).
+The card is drawn by :func:`nostalgiabox.overlay.guide_ass`, so it uses the same
+font, phosphor green and edge as the channel banner and volume bar. libass does
+the drawing (as it does for every other readout), via mpv's encoding mode, which
+burns the text into a single frame without needing a window or a display.
+
+Picture quality matters more here than anywhere else - it's small text, not a
+moving picture - so the card is made to stay sharp on the way to the screen:
+
+* **1920x1080.** Sharp when shrunk to a smaller TV (a 1366x768 panel is common
+  in the kind of room this box ends up in), native on a 1080p one. Being taller
+  than ``crt.max_height`` it also plays without the CRT effect, whose curvature
+  would otherwise resample every pixel of the text.
+* **Near-lossless encode.** A still costs almost nothing to encode well, and
+  thin saturated-green strokes are exactly what a default-quality encode smears.
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 import logging
+import os
 import shutil
-import socket
 import subprocess
 import tempfile
-import time
 from pathlib import Path
 from typing import Optional
 
@@ -52,6 +58,45 @@ DEFAULT_HINT = (
 # The picture never changes, so the encoder spends almost nothing on it.
 DEFAULT_SECONDS = 300
 
+CARD_WIDTH = 1920
+CARD_HEIGHT = 1080
+
+FONTS_DIR = Path(__file__).resolve().parent / "assets" / "fonts"
+
+
+def ass_script(events: str) -> str:
+    """Wrap overlay events (one per line) into a standalone .ass subtitle file.
+
+    The events are laid out on the same 1280x720 canvas as every overlay, and
+    libass scales them to whatever size the frame is rendered at.
+    """
+    header = (
+        "[Script Info]\n"
+        "ScriptType: v4.00+\n"
+        f"PlayResX: {CANVAS_W}\n"
+        f"PlayResY: {CANVAS_H}\n"
+        "WrapStyle: 2\n"
+        "ScaledBorderAndShadow: yes\n"
+        "\n"
+        "[V4+ Styles]\n"
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
+        "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, "
+        "ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, "
+        "MarginL, MarginR, MarginV, Encoding\n"
+        "Style: Default,VT323,40,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,"
+        "0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1\n"
+        "\n"
+        "[Events]\n"
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, "
+        "Effect, Text\n"
+    )
+    lines = [
+        f"Dialogue: 0,0:00:00.00,9:00:00.00,Default,,0,0,0,,{event}"
+        for event in events.split("\n")
+        if event.strip()
+    ]
+    return header + "\n".join(lines) + "\n"
+
 
 def render_card(
     config: Config,
@@ -59,66 +104,34 @@ def render_card(
     *,
     hint: str = DEFAULT_HINT,
     mpv_binary: str = "mpv",
-    timeout: float = 30.0,
+    width: int = CARD_WIDTH,
+    height: int = CARD_HEIGHT,
 ) -> Path:
-    """Draw the guide card to a PNG using mpv/libass, and return its path."""
+    """Draw the guide card to a PNG, headless, and return its path."""
     if shutil.which(mpv_binary) is None:
         raise RuntimeError(
             f"the '{mpv_binary}' binary was not found. Install it with "
             "`brew install mpv` (macOS) or `sudo apt install mpv` (Linux)."
         )
-    ass = guide_ass(config.channels, config.ui, hint=hint)
-    fonts_dir = Path(__file__).resolve().parent / "assets" / "fonts"
-
-    sock_dir = tempfile.mkdtemp(prefix="nostalgiabox-guide-")
-    sock_path = str(Path(sock_dir) / "mpv.sock")
     out_png.parent.mkdir(parents=True, exist_ok=True)
-
-    proc = subprocess.Popen(
-        [
-            mpv_binary,
-            # A plain black frame to draw the card onto. Paused on frame one:
-            # nothing moves, so there is nothing to wait for.
-            f"avdevice://lavfi:color=c=black:s={CANVAS_W}x{CANVAS_H}",
-            f"--input-ipc-server={sock_path}",
-            "--idle=yes",
-            "--force-window=yes",
-            "--pause=yes",
-            "--osc=no",
-            "--no-audio",
-            "--input-default-bindings=no",
-            "--input-vo-keyboard=no",
-            "--input-terminal=no",
-            f"--geometry={CANVAS_W}x{CANVAS_H}",
-            f"--sub-fonts-dir={fonts_dir}",
-        ],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    try:
-        sock = _connect(sock_path, proc, timeout)
-        try:
-            _send(sock, ["osd-overlay", 1, "ass-events", ass, CANVAS_W, CANVAS_H])
-            time.sleep(1.0)  # let libass lay the text out before capturing
-            _send(sock, ["screenshot-to-file", str(out_png), "window"])
-            deadline = time.monotonic() + timeout
-            while time.monotonic() < deadline:
-                if out_png.exists() and out_png.stat().st_size > 0:
-                    break
-                time.sleep(0.1)
-            else:
-                raise RuntimeError("mpv never wrote the guide screenshot")
-        finally:
-            sock.close()
-    finally:
-        proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:  # pragma: no cover - stubborn mpv
-            proc.kill()
-        shutil.rmtree(sock_dir, ignore_errors=True)
-
+    with tempfile.TemporaryDirectory(prefix="nostalgiabox-guide-") as tmp:
+        subs = Path(tmp) / "card.ass"
+        subs.write_text(
+            ass_script(guide_ass(config.channels, config.ui, hint=hint)),
+            encoding="utf-8",
+        )
+        cmd = [
+            mpv_binary, "--no-config", "--msg-level=all=error",
+            f"av://lavfi:color=c=black:s={width}x{height}:r=1:d=1",
+            f"--sub-file={subs}",
+            f"--sub-fonts-dir={FONTS_DIR}",
+            "--frames=1",
+            f"--o={out_png}", "--of=image2", "--ofopts=update=1", "--ovc=png",
+        ]
+        log.info("running: %s", " ".join(cmd))
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
+    if not out_png.is_file() or out_png.stat().st_size == 0:
+        raise RuntimeError(f"mpv did not write the guide card to {out_png}")
     log.info("wrote guide card: %s", out_png)
     return out_png
 
@@ -131,50 +144,44 @@ def generate_guide(
     hint: str = DEFAULT_HINT,
     keep_png: bool = False,
 ) -> Path:
-    """Render the card and encode it as the welcome channel's one episode."""
+    """Render the card and encode it as the welcome channel's one episode.
+
+    Written to a side file and swapped in at the end, so a running TV that has
+    the old card open never reads a half-written one - and a failed run never
+    leaves a broken ``.mp4`` for the channel to pick up.
+    """
     if shutil.which("ffmpeg") is None:
         raise RuntimeError("ffmpeg not found (brew install ffmpeg / apt install ffmpeg)")
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    png = out_path.with_suffix(".png")
-    render_card(config, png, hint=hint)
-
-    # A still picture at 5fps: tiny file, and mpv is happy to seek in it. Silent
-    # on purpose - the welcome channel should not blare when a kid lands on it.
-    cmd = [
-        "ffmpeg", "-y", "-loglevel", "error",
-        "-loop", "1", "-framerate", "5", "-i", str(png),
-        "-t", str(seconds),
-        "-c:v", "libx264", "-preset", "veryfast", "-tune", "stillimage",
-        "-pix_fmt", "yuv420p", "-r", "5", "-g", "25",
-        "-movflags", "+faststart",
-        str(out_path),
-    ]
-    log.info("running: %s", " ".join(cmd))
-    subprocess.run(cmd, check=True, capture_output=True, text=True)
-    if not keep_png:
-        png.unlink(missing_ok=True)
+    with tempfile.TemporaryDirectory(prefix="nostalgiabox-guide-") as tmp:
+        png = render_card(config, Path(tmp) / "card.png", hint=hint)
+        # Not "*.mp4": a leftover from a failed run must not become an episode.
+        partial = out_path.with_name(out_path.name + ".partial")
+        # A still at 5fps with a near-lossless quality setting: a tiny file that
+        # keeps thin text sharp. yuv420p High profile is what the Pi 3 decodes
+        # in hardware; 1080p is the most it will output anyway.
+        cmd = [
+            "ffmpeg", "-y", "-loglevel", "error",
+            "-loop", "1", "-framerate", "5", "-i", str(png),
+            "-t", str(seconds),
+            "-c:v", "libx264", "-preset", "slow", "-tune", "stillimage",
+            "-crf", "10", "-pix_fmt", "yuv420p", "-profile:v", "high",
+            "-r", "5", "-g", "50",
+            "-movflags", "+faststart",
+            "-f", "mp4", str(partial),
+        ]
+        log.info("running: %s", " ".join(cmd))
+        try:
+            subprocess.run(cmd, check=True, capture_output=True, text=True)
+        except BaseException:
+            partial.unlink(missing_ok=True)
+            raise
+        os.replace(partial, out_path)
+        if keep_png:
+            shutil.copy(png, out_path.with_suffix(".png"))
     log.info("wrote welcome channel: %s", out_path)
     return out_path
-
-
-# -- plumbing ---------------------------------------------------------------
-def _connect(sock_path: str, proc: subprocess.Popen, timeout: float):
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if proc.poll() is not None:
-            raise RuntimeError(f"mpv exited (code {proc.returncode}) before its socket")
-        try:
-            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            sock.connect(sock_path)
-            return sock
-        except OSError:
-            time.sleep(0.05)
-    raise RuntimeError(f"timed out waiting for mpv's IPC socket at {sock_path}")
-
-
-def _send(sock: socket.socket, command: list) -> None:
-    sock.sendall((json.dumps({"command": command}) + "\n").encode("utf-8"))
 
 
 def main(argv: Optional[list] = None) -> int:
@@ -184,7 +191,7 @@ def main(argv: Optional[list] = None) -> int:
     parser.add_argument("-c", "--config", required=True, help="path to config.yaml")
     parser.add_argument(
         "-o", "--out", required=True,
-        help=f"output video (e.g. /Volumes/WARPMEDIA/01-guide/{GUIDE_FILENAME})",
+        help=f"output video (e.g. /media/nostalgiabox/01-guide/{GUIDE_FILENAME})",
     )
     parser.add_argument(
         "--seconds", type=int, default=DEFAULT_SECONDS,
@@ -208,4 +215,6 @@ if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())
 
 
-__all__ = ["generate_guide", "render_card", "GUIDE_FILENAME", "DEFAULT_HINT"]
+__all__ = [
+    "generate_guide", "render_card", "ass_script", "GUIDE_FILENAME", "DEFAULT_HINT",
+]
