@@ -190,7 +190,8 @@ class TVApp:
         log.info("NostalgiaBox is on the air. %d channels.", len(self.lineup))
         try:
             while self._running:
-                self.step(block=True)
+                # Faster while something is animating (the standby screensaver).
+                self.step(block=True, timeout=self.overlay.frame_interval or 0.1)
         except KeyboardInterrupt:  # pragma: no cover - interactive convenience
             log.info("interrupted; shutting down")
         finally:

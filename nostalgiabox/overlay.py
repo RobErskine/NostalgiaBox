@@ -21,6 +21,7 @@ from typing import Callable, Dict, Optional
 
 from . import brand as brand_art
 from .config import Config, UiConfig
+from .screensaver import CORNERS, Screensaver
 from .titles import NowPlaying
 from .player import Player
 
@@ -49,6 +50,16 @@ _ID_CHANNEL = 1
 _ID_VOLUME = 2
 _ID_STANDBY = 3
 _ID_MESSAGE = 4
+_ID_WORDMARK = 5    # the standby screensaver's corner wordmark
+
+# Standby screensaver: frames per second, and how it looks. Dimmer than the
+# rest of the display - it's the "off" state, often in a dark room.
+_SAVER_FPS = 25
+_SAVER_LOGO_H = 150
+_SAVER_WORDMARK_H = 34
+_SAVER_MARGIN = 28
+_SAVER_LOGO_ALPHA = 0x40       # ~75% brightness
+_SAVER_WORDMARK_ALPHA = 0x90   # ~45% brightness
 
 _BLACK = "&H00000000"
 
@@ -76,6 +87,10 @@ class OverlayManager:
         self._clock = clock
         # overlay id -> wall time (monotonic) at which it should disappear.
         self._expiry: Dict[int, float] = {}
+        # The standby screensaver while it's running; see show_standby.
+        self._saver: Optional[Screensaver] = None
+        self._saver_drawn_at = 0.0
+        self._saver_corner: Optional[int] = None
 
     # -- public API ---------------------------------------------------------
     def show_channel_bug(
@@ -128,25 +143,64 @@ class OverlayManager:
         self._expiry.pop(_ID_MESSAGE, None)
 
     def show_standby(self) -> None:
-        """Persistent 'standby' notice for when the box is 'off'."""
-        ass = _standby_ass(self._ui)
-        self._player.set_overlay(_ID_STANDBY, ass, CANVAS_W, CANVAS_H)
+        """Start the standby screensaver: the logo drifting and bouncing around
+        the screen, the wordmark hopping between corners. Animated by tick()."""
+        logo_w, logo_h = _saver_sprite_size()
+        self._saver = Screensaver(
+            width=CANVAS_W,
+            height=CANVAS_H,
+            logo_w=logo_w,
+            logo_h=logo_h,
+            margin=_SAVER_MARGIN,
+            clock=self._clock,
+        )
+        self._saver_corner = None
         self._expiry.pop(_ID_STANDBY, None)
+        self._draw_saver()
 
     def clear_standby(self) -> None:
-        self._player.clear_overlay(_ID_STANDBY)
-        self._expiry.pop(_ID_STANDBY, None)
+        self._saver = None
+        self._saver_corner = None
+        for overlay_id in (_ID_STANDBY, _ID_WORDMARK):
+            self._player.clear_overlay(overlay_id)
+            self._expiry.pop(overlay_id, None)
+
+    @property
+    def frame_interval(self) -> Optional[float]:
+        """How often tick() needs calling to animate, or None when nothing moves."""
+        return 1.0 / _SAVER_FPS if self._saver is not None else None
+
+    def _draw_saver(self) -> None:
+        frame = self._saver.frame()
+        self._player.set_overlay(
+            _ID_STANDBY, _saver_logo_ass(frame.x, frame.y, self._ui), CANVAS_W, CANVAS_H
+        )
+        if frame.corner != self._saver_corner:
+            # Only when it moves: once a minute, not 25 times a second.
+            self._player.set_overlay(
+                _ID_WORDMARK, _saver_wordmark_ass(frame.corner, self._ui), CANVAS_W, CANVAS_H
+            )
+            self._saver_corner = frame.corner
+        self._saver_drawn_at = self._clock()
 
     def tick(self) -> None:
         """Clear any overlays whose time is up. Call this every loop iteration."""
         now = self._clock()
+        # Some slack: the main loop wakes every 1/25s too, and timer jitter would
+        # otherwise make half the wake-ups land a hair early and skip a frame -
+        # a stutter at half speed. (Position comes from the clock, so a late or
+        # early frame never throws the path off, only the smoothness.)
+        if self._saver is not None and now - self._saver_drawn_at >= 0.75 / _SAVER_FPS:
+            self._draw_saver()
         for overlay_id, when in list(self._expiry.items()):
             if now >= when:
                 self._player.clear_overlay(overlay_id)
                 self._expiry.pop(overlay_id, None)
 
     def clear_all(self) -> None:
-        for overlay_id in (_ID_CHANNEL, _ID_VOLUME, _ID_STANDBY, _ID_MESSAGE):
+        self._saver = None
+        self._saver_corner = None
+        for overlay_id in (_ID_CHANNEL, _ID_VOLUME, _ID_STANDBY, _ID_MESSAGE, _ID_WORDMARK):
             self._player.clear_overlay(overlay_id)
         self._expiry.clear()
 
@@ -286,8 +340,49 @@ def _message_ass(text: str, ui: UiConfig) -> str:
     return rf"{{\an8\pos({_FRAME_CX},{_IY0}){_style(ui, size=60)}}}{body}"
 
 
-def _standby_ass(ui: UiConfig) -> str:
-    return rf"{{\an5\pos({_FRAME_CX},{CANVAS_H // 2}){_style(ui, size=72)}}}STANDBY"
+# -- standby screensaver sprites --------------------------------------------
+# If the artwork can't be loaded, the word STANDBY bounces instead - still
+# moving, so still no burn-in.
+_SAVER_TEXT_SIZE = 72
+_SAVER_TEXT_W = 260
+
+
+def _saver_sprite_size() -> tuple:
+    art = brand_art.logo()
+    if art is None:
+        return _SAVER_TEXT_W, _SAVER_TEXT_SIZE
+    return _SAVER_LOGO_H * art.aspect, _SAVER_LOGO_H
+
+
+def _saver_logo_ass(x: float, y: float, ui: UiConfig) -> str:
+    art = brand_art.logo()
+    if art is None:
+        return (
+            rf"{{\an7\pos({round(x)},{round(y)})"
+            rf"{_style(ui, size=_SAVER_TEXT_SIZE, alpha=_SAVER_LOGO_ALPHA)}}}STANDBY"
+        )
+    return brand_art.art_ass(
+        art, x=x, y=y, height=_SAVER_LOGO_H,
+        fill=_hex_to_ass(ui.color), edge=_hex_to_ass(ui.dim_color),
+        alpha=_SAVER_LOGO_ALPHA,
+    )
+
+
+def _saver_wordmark_ass(corner: int, ui: UiConfig) -> str:
+    """The wordmark tucked into one of the four corners (see CORNERS)."""
+    art = brand_art.wordmark()
+    if art is None:
+        return ""
+    w, h = _SAVER_WORDMARK_H * art.aspect, _SAVER_WORDMARK_H
+    left = CORNERS[corner].endswith("left")
+    top = CORNERS[corner].startswith("top")
+    x = _SAVER_MARGIN if left else CANVAS_W - _SAVER_MARGIN - w
+    y = _SAVER_MARGIN if top else CANVAS_H - _SAVER_MARGIN - h
+    return brand_art.art_ass(
+        art, x=x, y=y, height=h,
+        fill=_hex_to_ass(ui.color), edge=_hex_to_ass(ui.dim_color),
+        alpha=_SAVER_WORDMARK_ALPHA,
+    )
 
 
 # --------------------------------------------------------------------------

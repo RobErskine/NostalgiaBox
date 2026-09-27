@@ -1,6 +1,8 @@
 import re
 
 from nostalgiabox.config import config_from_dict
+import pytest
+
 from nostalgiabox.overlay import OverlayManager
 from nostalgiabox.player import MockPlayer
 from tests.helpers import FakeClock, make_show
@@ -412,3 +414,77 @@ def test_caption_clears_the_volume_bar():
     from nostalgiabox.overlay import _BAR_ROW_TOP, _LOGO_TOP
 
     assert _LOGO_TOP < _BAR_ROW_TOP - 62   # caption sits above the logo, so above "Volume"
+
+
+# -- standby screensaver ----------------------------------------------------------
+
+
+class _CountingPlayer:
+    """A MockPlayer that also counts how often each overlay is re-sent."""
+
+    def __init__(self):
+        from nostalgiabox.player import MockPlayer
+
+        self.inner = MockPlayer()
+        self.sends = {}
+
+    def set_overlay(self, overlay_id, ass, w, h):
+        self.sends[overlay_id] = self.sends.get(overlay_id, 0) + 1
+        self.inner.set_overlay(overlay_id, ass, w, h)
+
+    def clear_overlay(self, overlay_id):
+        self.inner.clear_overlay(overlay_id)
+
+    @property
+    def overlays(self):
+        return self.inner.overlays
+
+
+def _saver_manager(tmp_path):
+    player, clock = _CountingPlayer(), FakeClock()
+    return OverlayManager(player, _config(tmp_path), clock=clock), player, clock
+
+
+def test_standby_is_the_moving_logo_not_static_text(tmp_path):
+    om, player, clock = _saver_manager(tmp_path)
+    om.show_standby()
+    first = player.overlays[3]
+
+    clock.advance(1.0)
+    om.tick()
+
+    assert r"\p1" in first and "STANDBY" not in first   # the logo artwork
+    assert player.overlays[3] != first                  # ...and it has moved
+    assert 5 in player.overlays                         # the corner wordmark
+
+
+def test_only_the_logo_is_resent_every_frame(tmp_path):
+    om, player, clock = _saver_manager(tmp_path)
+    om.show_standby()
+    for _ in range(25 * 10):                            # ten seconds of frames
+        clock.advance(1 / 25)
+        om.tick()
+
+    assert player.sends[3] > 200                        # animating
+    assert player.sends[5] == 1                         # wordmark drawn once
+
+
+def test_animation_only_asks_for_fast_ticks_while_running(tmp_path):
+    om, _, _ = _saver_manager(tmp_path)
+    assert om.frame_interval is None
+
+    om.show_standby()
+    assert om.frame_interval == pytest.approx(1 / 25)
+
+    om.clear_standby()
+    assert om.frame_interval is None
+
+
+def test_leaving_standby_removes_logo_and_wordmark(tmp_path):
+    om, player, clock = _saver_manager(tmp_path)
+    om.show_standby()
+    om.clear_standby()
+    clock.advance(1.0)
+    om.tick()                                           # must not redraw
+
+    assert 3 not in player.overlays and 5 not in player.overlays

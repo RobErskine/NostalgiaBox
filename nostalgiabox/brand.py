@@ -116,16 +116,19 @@ def art_ass(
     height: float,
     fill: str,
     edge: Optional[str] = None,
+    alpha: int = 0,
 ) -> str:
     """One ASS event drawing ``art`` with its top-left corner at (x, y).
 
     ``edge`` gives the artwork the same thin dark outline as the OSD text, so it
-    stays legible over bright video. Anchored top-left (``\\an7``) with
-    coordinates starting at 0,0 - the placement that lands exactly.
+    stays legible over bright video. ``alpha`` is ASS transparency (0 = solid,
+    255 = invisible). Anchored top-left (``\\an7``) with coordinates starting
+    at 0,0 - the placement that lands exactly.
     """
-    border = rf"\bord1\3c{edge}\3a&H00&" if edge else r"\bord0"
+    a = f"&H{alpha:02X}&"
+    border = rf"\bord1\3c{edge}\3a{a}" if edge else r"\bord0"
     return (
-        rf"{{\an7\pos({round(x)},{round(y)})\p1\c{fill}\1a&H00&{border}\shad0\blur0.5}}"
+        rf"{{\an7\pos({round(x)},{round(y)})\p1\c{fill}\1a{a}{border}\shad0\blur0.5}}"
         f"{drawing(art, height)}{{\\p0}}"
     )
 
