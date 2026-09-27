@@ -88,6 +88,9 @@ class TVApp:
         # code; "" or more = the digits typed so far. While this is set, DIGIT
         # and ENTER events go here instead of the channel-number entry above.
         self._code_buffer: Optional[str] = None
+        # The digit currently showing on the lock screen's dial. A remote with
+        # no number pad (the Argon) turns it with ◀ / ▶ and locks it in with OK.
+        self._dial = 0
 
         # The "RESUMING - PRESS OK TO START OVER" banner window: an ENTER press
         # before this deadline discards the resume position and starts fresh.
@@ -259,15 +262,19 @@ class TVApp:
         if self.standby:
             return
 
-        # A locked channel's lock screen is showing: digits/ENTER go to the
-        # passcode entry instead of channel-number entry. Channel-nav cancels
-        # entry and lets the surf-away happen normally (falls through below).
+        # A locked channel's lock screen is showing: it's a combination lock.
+        # ◀ / ▶ turn the dial, OK locks in its digit; typed digits (keyboard,
+        # TV remote over CEC) go straight in. Channel-nav cancels entry and lets
+        # the surf-away happen normally (falls through below).
         if self._code_buffer is not None:
             if action == Action.DIGIT:
                 self._push_code_digit(event.value or 0)
                 return
             if action == Action.ENTER:
-                self._submit_code()
+                self._push_code_digit(self._dial)
+                return
+            if action in (Action.NEXT_EPISODE, Action.PREVIOUS_EPISODE):
+                self._turn_dial(1 if action == Action.NEXT_EPISODE else -1)
                 return
             if action in (Action.CHANNEL_UP, Action.CHANNEL_DOWN, Action.LAST_CHANNEL):
                 self._code_buffer = None
@@ -443,10 +450,8 @@ class TVApp:
             self.player.stop()
         if channel.locked:
             self._code_buffer = ""
-            text = channel.config.locked_message or (
-                f"CH {channel.number:02d}  {channel.name}  -  LOCKED"
-            )
-            self.overlay.show_message(f"{text}\nENTER CODE", duration=0)
+            self._dial = 0
+            self._show_lock_screen()
         else:
             self.overlay.show_message(
                 f"CH {channel.number:02d}  {channel.name}  -  NO SIGNAL", duration=6.0
@@ -546,17 +551,21 @@ class TVApp:
             self._confirm_digits()
 
     # -- passcode entry -------------------------------------------------------
+    def _code_length(self) -> int:
+        return len(self.lineup.current.config.passcode or "0000")
+
     def _push_code_digit(self, digit: int) -> None:
-        channel = self.lineup.current
-        max_len = len(channel.config.passcode or "0000")
-        self._code_buffer = ((self._code_buffer or "") + str(digit))[-max_len:]
-        masked = "*" * len(self._code_buffer) + "_"
-        text = channel.config.locked_message or (
-            f"CH {channel.number:02d}  {channel.name}  -  LOCKED"
-        )
-        self.overlay.show_message(f"{text}\nCODE: {masked}", duration=0)
-        if len(self._code_buffer) >= max_len:
+        length = self._code_length()
+        self._code_buffer = ((self._code_buffer or "") + str(digit))[-length:]
+        self._dial = 0  # each new digit starts from 0
+        if len(self._code_buffer) >= length:
             self._submit_code()
+        else:
+            self._show_lock_screen()
+
+    def _turn_dial(self, step: int) -> None:
+        self._dial = (self._dial + step) % 10  # wraps: ◀ from 0 gives 9
+        self._show_lock_screen()
 
     def _submit_code(self) -> None:
         channel = self.lineup.current
@@ -566,10 +575,27 @@ class TVApp:
             self.tune_current(show_static=False)
         else:
             self._code_buffer = ""
-            text = channel.config.locked_message or (
-                f"CH {channel.number:02d}  {channel.name}  -  LOCKED"
-            )
-            self.overlay.show_message(f"{text}\nINCORRECT - TRY AGAIN", duration=2.5)
+            self._dial = 0
+            self._show_lock_screen(status="INCORRECT - TRY AGAIN")
+
+    def _show_lock_screen(self, status: Optional[str] = None) -> None:
+        """The combination lock: digits entered (masked), the dial, and help.
+
+        Stays up until the channel unlocks or the viewer surfs away - including
+        after a wrong code, which says so in place of the help line rather than
+        flashing and leaving bare colour bars behind.
+        """
+        channel = self.lineup.current
+        title = channel.config.locked_message or (
+            f"CH {channel.number:02d}  {channel.name}  -  LOCKED"
+        )
+        self.overlay.show_lock(
+            title,
+            entered=len(self._code_buffer or ""),
+            dial=self._dial,
+            length=self._code_length(),
+            status=status,
+        )
 
     # -- resume banner ----------------------------------------------------
     def _restart_without_resume(self) -> None:

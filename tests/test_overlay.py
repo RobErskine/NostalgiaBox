@@ -263,3 +263,100 @@ def test_guide_escapes_channel_names():
     ass = guide_ass([_Ch(1, "Odd {name}")], UiConfig())
 
     assert "Odd (name)" in ass
+
+
+def test_multi_line_message_is_one_styled_event():
+    """Every line of a message must keep its position and green styling.
+
+    A real newline reaching mpv starts a new, unstyled osd-overlay event, so
+    the lock screen's second and third lines landed top-left in plain white.
+    """
+    from nostalgiabox.config import UiConfig
+    from nostalgiabox.overlay import _message_ass
+
+    ass = _message_ass("ADULT SWIM - LOCKED\nENTER CODE  [0] _ _ _\n< >  OK", UiConfig())
+
+    assert "\n" not in ass
+    assert ass.count(r"\N") == 2
+    assert ass.startswith(r"{\an8\pos(")
+
+
+# -- lock screen layout -------------------------------------------------------
+
+
+def _boxes(ass):
+    """(x, width) of each digit box - every drawing except the backing panel."""
+    import re
+
+    out = []
+    for line in ass.split("\n")[1:]:
+        if r"\p1" in line:
+            x = int(re.search(r"\\pos\((\d+),", line).group(1))
+            w = int(re.search(r"m 0 0 l (\d+) 0", line).group(1))
+            out.append((x, w))
+    return out
+
+
+def test_lock_screen_has_one_box_per_digit():
+    from nostalgiabox.config import UiConfig
+    from nostalgiabox.overlay import _lock_ass
+
+    for length in (1, 4, 6, 8):
+        ass = _lock_ass("LOCKED", UiConfig(), entered=0, dial=0, length=length)
+        assert len(_boxes(ass)) == length
+
+
+def test_long_codes_still_fit_inside_the_panel():
+    """Passcodes can be up to 8 digits; boxes narrow rather than overflow."""
+    from nostalgiabox.config import UiConfig
+    from nostalgiabox.overlay import _LOCK_PANEL_W, _LOCK_PANEL_X, _lock_ass
+
+    ass = _lock_ass("LOCKED", UiConfig(), entered=3, dial=5, length=8)
+    for x, w in _boxes(ass):
+        assert x >= _LOCK_PANEL_X and x + w <= _LOCK_PANEL_X + _LOCK_PANEL_W
+
+
+def test_lock_panel_clears_the_banner_volume_bar_and_logo():
+    """Vol +/- and the channel banner both appear over the lock screen."""
+    from nostalgiabox.overlay import (
+        _BAR_ROW_TOP, _IY0, _LOCK_PANEL_H, _LOCK_PANEL_Y, _LOGO_CY, _PORTAL_RY,
+    )
+
+    panel_bottom = _LOCK_PANEL_Y + _LOCK_PANEL_H
+    assert _LOCK_PANEL_Y > _IY0 + 104 + 40              # below the show-name line
+    assert panel_bottom < _BAR_ROW_TOP - 62             # above the "Volume" label
+    assert panel_bottom < _LOGO_CY - _PORTAL_RY         # above the corner logo
+
+
+def test_lock_screen_masks_entered_digits_and_highlights_the_dial():
+    from nostalgiabox.config import UiConfig
+    from nostalgiabox.overlay import _lock_ass
+
+    ass = _lock_ass("LOCKED", UiConfig(), entered=2, dial=7, length=4)
+    lines = ass.split("\n")
+
+    assert sum(1 for line in lines if line.endswith("}*")) == 2
+    assert sum(1 for line in lines if line.endswith("}7")) == 1
+
+
+def test_status_replaces_the_help_line():
+    from nostalgiabox.config import UiConfig
+    from nostalgiabox.overlay import _lock_ass
+
+    ass = _lock_ass("LOCKED", UiConfig(), entered=0, dial=0, length=4,
+                    status="INCORRECT - TRY AGAIN")
+
+    assert "INCORRECT - TRY AGAIN" in ass
+    assert "CHOOSE" not in ass
+
+
+def test_text_glow_has_a_dark_edge_not_a_green_halo():
+    """The old 4px blurred *green* border smeared text over bright video."""
+    from nostalgiabox.config import UiConfig
+    from nostalgiabox.overlay import _hex_to_ass, _style
+
+    ui = UiConfig()
+    tags = _style(ui, size=40)
+
+    assert rf"\3c{_hex_to_ass(ui.dim_color)}" in tags
+    assert r"\blur4" not in tags

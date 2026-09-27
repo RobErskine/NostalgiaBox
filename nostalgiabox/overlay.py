@@ -108,6 +108,22 @@ class OverlayManager:
         self._player.set_overlay(_ID_MESSAGE, ass, CANVAS_W, CANVAS_H)
         self._arm(_ID_MESSAGE, dur)
 
+    def show_lock(
+        self,
+        title: str,
+        *,
+        entered: int,
+        dial: int,
+        length: int,
+        status: Optional[str] = None,
+    ) -> None:
+        """The combination lock. Stays up until replaced or cleared."""
+        ass = _lock_ass(
+            title, self._ui, entered=entered, dial=dial, length=length, status=status
+        )
+        self._player.set_overlay(_ID_MESSAGE, ass, CANVAS_W, CANVAS_H)
+        self._expiry.pop(_ID_MESSAGE, None)
+
     def show_standby(self) -> None:
         """Persistent 'standby' notice for when the box is 'off'."""
         ass = _standby_ass(self._ui)
@@ -155,9 +171,13 @@ def _style(ui: UiConfig, *, size: int, alpha: int = 0) -> str:
     color = _hex_to_ass(ui.color, alpha)
     tags = rf"\fn{ui.font}\b1\fs{size}\c{color}\1a&H{alpha:02X}&"
     if ui.glow:
-        # A blurred green border reads as phosphor bloom; a faint dark edge keeps
-        # it legible over bright video.
-        tags += rf"\bord2\blur4\3c{color}\4c{_BLACK}\shad0"
+        # Lit phosphor against the unlit screen: an edge in the dark "unlit"
+        # green, softened by a pixel. It keeps text crisp and legible over
+        # bright video - including the colour bars behind the lock screen. (It
+        # used to be a 4px blurred *green* border, a halo that smeared text
+        # into the background on anything light.)
+        dim = _hex_to_ass(ui.dim_color, alpha)
+        tags += rf"\bord2\blur1\3c{dim}\shad0"
     else:
         tags += rf"\bord2\3c{_BLACK}\shad0"
     return tags
@@ -221,12 +241,95 @@ def _volume_ass(level: int, muted: bool, ui: UiConfig) -> str:
 
 
 def _message_ass(text: str, ui: UiConfig) -> str:
-    """A centred green digital message (channel entry, 'NO SIGNAL', etc.)."""
-    return rf"{{\an8\pos({_FRAME_CX},{_IY0}){_style(ui, size=60)}}}{_escape(text)}"
+    """A centred green digital message (channel entry, 'NO SIGNAL', etc.).
+
+    A python ``\\n`` in ``text`` becomes a forced line break (``\\N``) within
+    the same event. It must not reach mpv as a real newline: each line of an
+    ``osd-overlay`` is a separate event, so every line after the first would
+    lose the position and styling and land top-left in plain white.
+    """
+    body = r"\N".join(_escape(line) for line in text.split("\n"))
+    return rf"{{\an8\pos({_FRAME_CX},{_IY0}){_style(ui, size=60)}}}{body}"
 
 
 def _standby_ass(ui: UiConfig) -> str:
     return rf"{{\an5\pos({_FRAME_CX},{CANVAS_H // 2}){_style(ui, size=72)}}}STANDBY"
+
+
+# --------------------------------------------------------------------------
+# Lock screen (a combination lock)
+# --------------------------------------------------------------------------
+# Big enough to read from the couch, in the middle of the picture, on a dark
+# panel so it's legible over the colour bars. One box per digit; the digit
+# being chosen is in inverse video (black on a solid green box), the way a
+# VCR's clock highlights the field you're setting. The panel sits between the
+# channel banner (top right) and the volume bar / corner logo (bottom), so
+# pressing Vol +/- on the lock screen doesn't collide with it.
+_LOCK_PANEL_X = _FRAME_CX - 400
+_LOCK_PANEL_Y = 196
+_LOCK_PANEL_W = 800
+_LOCK_PANEL_H = 330
+_LOCK_BOX_H = 130
+_LOCK_BOX_MAX_W = 110
+_LOCK_BOX_GAP = 22
+_LOCK_BOXES_Y = _LOCK_PANEL_Y + 112
+
+
+def _lock_ass(
+    title: str,
+    ui: UiConfig,
+    *,
+    entered: int,
+    dial: int,
+    length: int,
+    status: Optional[str] = None,
+) -> str:
+    """The lock screen: title, one box per digit, and a help (or status) line.
+
+    ``entered`` digits show as ``*``; the next box shows ``dial`` highlighted;
+    the rest are empty. Boxes narrow to fit a long code (up to 8 digits).
+    """
+    green = _hex_to_ass(ui.color)
+    length = max(1, length)
+    inner_w = _LOCK_PANEL_W - 100
+    box_w = min(_LOCK_BOX_MAX_W, (inner_w - (length - 1) * _LOCK_BOX_GAP) // length)
+    total_w = length * box_w + (length - 1) * _LOCK_BOX_GAP
+    x0 = _FRAME_CX - total_w // 2
+    digit_size = min(int(_LOCK_BOX_H * 0.8), int(box_w * 1.6))
+
+    parts = [
+        _filled_rect(
+            x=_LOCK_PANEL_X, y=_LOCK_PANEL_Y, w=_LOCK_PANEL_W, h=_LOCK_PANEL_H,
+            fill=_BLACK, alpha=0x18,  # nearly opaque: bars mustn't muddy it
+        ),
+        rf"{{\an8\pos({_FRAME_CX},{_LOCK_PANEL_Y + 16}){_style(ui, size=46)}}}"
+        f"{_escape(title)}",
+        rf"{{\an8\pos({_FRAME_CX},{_LOCK_PANEL_Y + 68}){_style(ui, size=30)}}}"
+        "ENTER CODE",
+    ]
+    for i in range(length):
+        x = x0 + i * (box_w + _LOCK_BOX_GAP)
+        cx, cy = x + box_w // 2, _LOCK_BOXES_Y + _LOCK_BOX_H // 2
+        if i == entered:
+            # The digit being chosen: inverse video.
+            parts.append(_filled_rect(x=x, y=_LOCK_BOXES_Y, w=box_w, h=_LOCK_BOX_H, fill=green))
+            parts.append(
+                rf"{{\an5\pos({cx},{cy})\fn{ui.font}\b1\fs{digit_size}"
+                rf"\c{_BLACK}\bord0\shad0\blur0}}{dial}"
+            )
+        else:
+            parts.append(_outlined_rect(x=x, y=_LOCK_BOXES_Y, w=box_w, h=_LOCK_BOX_H, stroke=green))
+            if i < entered:
+                parts.append(
+                    rf"{{\an5\pos({cx},{cy})"
+                    rf"{_style(ui, size=digit_size)}}}*"
+                )
+    footer = status or "< >  CHOOSE        OK  NEXT"
+    parts.append(
+        rf"{{\an8\pos({_FRAME_CX},{_LOCK_BOXES_Y + _LOCK_BOX_H + 22})"
+        rf"{_style(ui, size=38)}}}{_escape(footer)}"
+    )
+    return "\n".join(parts)
 
 
 # --------------------------------------------------------------------------
@@ -380,12 +483,33 @@ def _ring(*, cx: float, cy: float, rx: float, ry: float, stroke: str) -> str:
     )
 
 
-def _filled_rect(*, x: float, y: float, w: float, h: float, fill: str) -> str:
-    """An ASS drawing (\\p1) filled rectangle at absolute canvas coordinates."""
+def _filled_rect(
+    *, x: float, y: float, w: float, h: float, fill: str, alpha: int = 0
+) -> str:
+    """An ASS drawing (\\p1) filled rectangle at absolute canvas coordinates.
+
+    ``alpha`` is ASS transparency: 0 = opaque, 255 = invisible.
+    """
     x, y = round(x), round(y)
     w, h = round(w), round(h)
     draw = f"m 0 0 l {w} 0 l {w} {h} l 0 {h}"
-    return rf"{{\an7\pos({x},{y})\p1\c{fill}\1a&H00&\bord0\shad0}}{draw}{{\p0}}"
+    return (
+        rf"{{\an7\pos({x},{y})\p1\c{fill}\1a&H{alpha:02X}&\bord0\shad0}}"
+        rf"{draw}{{\p0}}"
+    )
+
+
+def _outlined_rect(*, x: float, y: float, w: float, h: float, stroke: str) -> str:
+    """A hollow rectangle: transparent fill, coloured border. Anchored top-left
+    for the same reason as :func:`_ring` - a bordered drawing centred with
+    ``\\an5`` doesn't land where the arithmetic says."""
+    x, y = round(x), round(y)
+    w, h = round(w), round(h)
+    draw = f"m 0 0 l {w} 0 l {w} {h} l 0 {h} l 0 0"  # closed: square corners
+    return (
+        rf"{{\an7\pos({x},{y})\p1\1a&HFF&\bord3\3c{stroke}\3a&H00&\shad0}}"
+        rf"{draw}{{\p0}}"
+    )
 
 
 def _dot(*, cx: float, cy: float, r: float, fill: str) -> str:

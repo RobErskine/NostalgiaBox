@@ -425,7 +425,9 @@ def test_wrong_passcode_stays_locked_and_shows_incorrect(tmp_path):
         send(app, Action.DIGIT, digit)
     assert app.lineup.current.locked is True
     assert "INCORRECT" in player.overlays.get(4, "")
-    assert player.current is None  # never started playing
+    # Never started an episode: nothing, or only the colour-bars filler loop
+    # (present wherever the filler clips have been generated, e.g. on the Pi).
+    assert player.current is None or player.looping is not None
 
 
 def test_digits_go_to_passcode_not_channel_jump_while_locked(tmp_path):
@@ -742,3 +744,124 @@ def test_no_watch_means_no_restarts(tmp_path):
     app.step()
 
     assert app._running is True
+
+
+# -- combination lock (a remote with no number pad) -----------------------------
+# ◀ / ▶ turn the dial, OK locks in its digit. The Argon remote has no digits, so
+# this is the only way it can unlock a channel.
+
+
+def _dial_shown(screen):
+    """The digit in the highlighted (inverse-video, black-on-green) box."""
+    import re
+
+    m = re.search(r"\\c&H00000000&?\\bord0\\shad0\\blur0\}(\d)$", screen, re.M)
+    return int(m.group(1)) if m else None
+
+
+def _stars_shown(screen):
+    """How many digits show as entered (masked with *)."""
+    import re
+
+    return len(re.findall(r"\}\*$", screen, re.M))
+
+
+def _dial(app, target):
+    """Turn the dial from 0 to ``target`` the short way, then press OK."""
+    steps = target if target <= 5 else target - 10
+    action = Action.NEXT_EPISODE if steps > 0 else Action.PREVIOUS_EPISODE
+    for _ in range(abs(steps)):
+        send(app, action)
+    send(app, Action.ENTER)
+
+
+def test_lock_screen_shows_the_dial(tmp_path):
+    app, player, _ = build_locked_app(tmp_path)
+    app.start()
+    send(app, Action.CHANNEL_UP)
+
+    screen = player.overlays[4]
+    assert "ENTER CODE" in screen
+    assert _dial_shown(screen) == 0
+    assert _stars_shown(screen) == 0
+    assert "CHOOSE" in screen and "NEXT" in screen
+
+
+def test_right_turns_the_dial_up_and_left_wraps_below_zero(tmp_path):
+    app, player, _ = build_locked_app(tmp_path)
+    app.start()
+    send(app, Action.CHANNEL_UP)
+
+    send(app, Action.NEXT_EPISODE)
+    assert _dial_shown(player.overlays[4]) == 1
+    send(app, Action.PREVIOUS_EPISODE)
+    send(app, Action.PREVIOUS_EPISODE)
+    assert _dial_shown(player.overlays[4]) == 9
+
+
+def test_ok_locks_in_a_digit_and_the_next_starts_at_zero(tmp_path):
+    app, player, _ = build_locked_app(tmp_path)
+    app.start()
+    send(app, Action.CHANNEL_UP)
+
+    _dial(app, 1)
+
+    assert app._code_buffer == "1"
+    assert _stars_shown(player.overlays[4]) == 1          # first digit masked
+    assert _dial_shown(player.overlays[4]) == 0           # next starts at 0
+
+
+def test_dialling_the_right_code_unlocks(tmp_path):
+    app, player, _ = build_locked_app(tmp_path)
+    app.start()
+    send(app, Action.CHANNEL_UP)
+
+    for digit in (1, 9, 9, 7):
+        _dial(app, digit)
+
+    assert app.lineup.current.locked is False
+    assert player.current is not None
+
+
+def test_wrong_dialled_code_keeps_the_lock_screen_up(tmp_path):
+    """Previously 'INCORRECT' vanished after 2.5s and took the prompt with it."""
+    app, player, clock = build_locked_app(tmp_path)
+    app.start()
+    send(app, Action.CHANNEL_UP)
+    for digit in (0, 0, 0, 0):
+        _dial(app, digit)
+
+    assert app.lineup.current.locked is True
+    assert "INCORRECT" in player.overlays[4]
+    clock.advance(30)
+    app.step()
+    screen = player.overlays[4]                            # still there, reset
+    assert "ENTER CODE" in screen
+    assert _dial_shown(screen) == 0 and _stars_shown(screen) == 0
+
+
+def test_typed_and_dialled_digits_mix(tmp_path):
+    """A keyboard and the Argon remote can share one attempt."""
+    app, _, _ = build_locked_app(tmp_path)
+    app.start()
+    send(app, Action.CHANNEL_UP)
+
+    send(app, Action.DIGIT, 1)
+    _dial(app, 9)
+    send(app, Action.DIGIT, 9)
+    _dial(app, 7)
+
+    assert app.lineup.current.locked is False
+
+
+def test_dial_buttons_skip_episodes_again_once_unlocked(tmp_path):
+    app, player, _ = build_locked_app(tmp_path, transition="none", bridge_seconds=0)
+    app.start()
+    send(app, Action.CHANNEL_UP)
+    for digit in (1, 9, 9, 7):
+        _dial(app, digit)
+    before = player.current
+
+    send(app, Action.NEXT_EPISODE)
+
+    assert player.current != before

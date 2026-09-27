@@ -349,14 +349,29 @@ keys NostalgiaBox understands. Do this **on your computer**:
    would undo it). And since Vol − is now the only volume-down button, it's also
    the one that powers the box off when pressed again at zero.
 
-   **The Argon remote has no number buttons**, so typing a channel number
-   directly — and typing the passcode on a locked channel — can't be done from
-   it. Every button is already spoken for, so there's nowhere to put digits
-   either. Two ways round it, and you can use both at once:
+   **Unlocking a channel with no number buttons.** A locked channel's screen
+   is a combination lock:
 
-   * Leave **HDMI-CEC** enabled (it is by default). The TV's own remote has a
-     number pad, and NostalgiaBox reads it over the HDMI cable.
-   * Keep a **USB keyboard** plugged in for the rare unlock.
+   ```
+           ADULT SWIM - LOCKED
+               ENTER CODE
+     ┌────┐ ┌────┐ ┌────┐ ┌────┐
+     │ *  │ │▓ 7▓│ │    │ │    │
+     └────┘ └────┘ └────┘ └────┘
+        < >  CHOOSE     OK  NEXT
+   ```
+
+   It fills the middle of the screen on a dark panel, with the digit you're
+   choosing in a solid green box. **◀ / ▶** turn that digit (0–9, wrapping
+   round), **OK** locks it in
+   and moves to the next. Each digit starts at 0, so `1997` is: ▶ OK, ◀ OK,
+   ◀ OK, ◀◀◀ OK. A wrong code says so and starts again; ▲ / ▼ still surf away.
+   Digits typed on a keyboard, or on the TV's own remote over HDMI-CEC, work on
+   the same screen too.
+
+   The one thing the Argon remote can't do is jump straight to a channel by
+   number — use ▲ / ▼, or teach a spare remote's number pad to the same Flirc
+   (a Flirc learns any number of remotes).
 
 5. **Test it before it leaves your computer.** Open a blank text document and
    press ◀ ▶ Vol+ Vol− ☰ Power in that order. It should type exactly `,.=-ip`.
@@ -462,7 +477,8 @@ channel" in Part F) so channel 1 lists it.
 | See what's playing | Menu / Info |
 | Back to the channel guide | Home |
 | Back to the last channel watched | Back |
-| Jump to a channel | Type the number, then OK |
+| Jump to a channel | Type the number, then OK (needs a number pad) |
+| Unlock a locked channel | ◀ / ▶ pick each digit, OK for the next |
 | Standby (blank screen) | Power |
 | **Turn off** (safe to unplug) | Volume-down again when already at 0 |
 
