@@ -79,6 +79,9 @@ class TVApp:
         self.volume = config.initial_volume
         self.muted = False
         self._last_volume_down = float("-inf")
+        # When the current still screen (guide, lock screen, colour bars) started
+        # being looked at without a button press; None while the picture moves.
+        self._still_since: Optional[float] = None
         self.standby = False
         self.powered_off = False
         self._playing_path: Optional[Path] = None
@@ -225,6 +228,7 @@ class TVApp:
         self._maybe_commit_switch(now)
         self._maybe_commit_digits(now)
         self._maybe_expire_resume_offer(now)
+        self._maybe_idle_standby(now)
         self._drain_playback_events()
 
         event = self.input.get(timeout=timeout if block else 0.0)
@@ -259,6 +263,7 @@ class TVApp:
     # -- input handling -----------------------------------------------------
     def handle_event(self, event: InputEvent) -> None:
         action = event.action
+        self._still_since = None  # someone's here: restart the burn-in count
 
         if action == Action.QUIT:
             self._running = False
@@ -559,6 +564,32 @@ class TVApp:
         else:
             self.overlay.clear_standby()
             self.tune_current(show_static=False)
+
+    def _on_still_screen(self) -> bool:
+        """Is the picture one that never changes? The guide card, or the colour
+        bars behind a lock screen or an empty channel's NO SIGNAL."""
+        if self.standby or self.powered_off:
+            return False
+        if self._playing_path is None:
+            return True  # the colour-bars slate (locked or empty channel)
+        return self._playing_path.name == GUIDE_FILENAME
+
+    def _maybe_idle_standby(self, now: float) -> None:
+        """Burn-in guard: a still screen left alone too long goes to standby,
+        where the screensaver keeps everything moving."""
+        limit = self.config.idle_standby_minutes * 60.0
+        if limit <= 0 or not self._on_still_screen():
+            self._still_since = None
+            return
+        if self._still_since is None:
+            self._still_since = now
+        elif now - self._still_since >= limit:
+            log.info(
+                "still screen for %.0f min with no input - standby (burn-in guard)",
+                self.config.idle_standby_minutes,
+            )
+            self._still_since = None
+            self._toggle_standby()
 
     def _relock_all(self) -> None:
         """Re-lock every passcode-gated channel (standby/power-off fail-safe)."""

@@ -975,3 +975,98 @@ def test_break_clips_get_no_caption(tmp_path):
     clip = PlayRequest(path=tmp_path / "breaks" / "snack-time.mp4", is_break=True)
 
     assert app._caption_for(app.lineup.current, clip) is None
+
+
+# -- burn-in guard: still screens left alone go to standby ---------------------------
+
+
+def build_guide_app(tmp_path, **overrides):
+    """An app that boots onto a guide channel (one welcome.mp4), like the box."""
+    guide = tmp_path / "01-guide"
+    guide.mkdir()
+    (guide / "welcome.mp4").write_bytes(b"\x00")
+    make_show(tmp_path, "dragon", 4)
+    locked = make_show(tmp_path, "late", 4)
+    data = {
+        "start_channel": 1,
+        "start_offset": 0,
+        "transition": "none",
+        "bridge_seconds": 0,
+        "power_off_command": [],
+        "channels": [
+            {"number": 1, "name": "Guide", "path": str(guide), "breaks": False},
+            {"number": 2, "name": "Dragon Tales", "path": str(tmp_path / "dragon")},
+            {"number": 9, "name": "Late", "path": str(locked), "passcode": "1997"},
+        ],
+    }
+    data.update(overrides)
+    clock = FakeClock()
+    app = TVApp(config_from_dict(data), MockPlayer(), InputManager([]), clock=clock)
+    app.start()
+    return app, clock
+
+
+def _idle(app, clock, minutes):
+    """Let time pass with nobody touching the remote, stepping like the loop."""
+    for _ in range(int(minutes * 60)):
+        clock.advance(1.0)
+        app.step()
+
+
+def test_ten_minutes_on_the_guide_goes_to_standby(tmp_path):
+    app, clock = build_guide_app(tmp_path)
+
+    _idle(app, clock, 9.9)
+    assert not app.standby
+    _idle(app, clock, 0.2)
+
+    assert app.standby
+
+
+def test_pressing_a_button_restarts_the_count(tmp_path):
+    app, clock = build_guide_app(tmp_path)
+    _idle(app, clock, 9)
+    send(app, Action.VOLUME_UP)            # somebody's watching
+
+    _idle(app, clock, 9)
+    assert not app.standby
+    _idle(app, clock, 1.1)
+    assert app.standby
+
+
+def test_an_ordinary_show_never_triggers_it(tmp_path):
+    app, clock = build_guide_app(tmp_path)
+    send(app, Action.CHANNEL_UP)           # to Dragon Tales
+
+    _idle(app, clock, 60)
+
+    assert not app.standby
+
+
+def test_a_lock_screen_left_alone_goes_to_standby(tmp_path):
+    app, clock = build_guide_app(tmp_path)
+    app.select_channel_number(9)           # locked: colour bars + the dial
+
+    _idle(app, clock, 10.1)
+
+    assert app.standby
+
+
+def test_waking_up_goes_back_to_the_guide_with_a_fresh_count(tmp_path):
+    app, clock = build_guide_app(tmp_path)
+    _idle(app, clock, 10.1)
+    assert app.standby
+
+    send(app, Action.POWER)                # wake: back to channel 1
+    assert not app.standby and app.lineup.current.number == 1
+    _idle(app, clock, 9)
+
+    assert not app.standby                 # not straight back to sleep
+
+
+def test_zero_minutes_turns_the_guard_off(tmp_path):
+    app, clock = build_guide_app(tmp_path, idle_standby_minutes=0)
+
+    _idle(app, clock, 60)
+
+    assert not app.standby

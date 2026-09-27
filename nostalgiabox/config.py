@@ -160,6 +160,11 @@ class Config:
     # frame on channel change). 0 = switch immediately.
     bridge_seconds: float = 0.8
     channel_bug_seconds: float = 4.0      # how long the channel banner lingers
+    # Burn-in guard: after this many minutes on a still screen - the guide
+    # card, a locked channel's lock screen, an empty channel's colour bars -
+    # with no remote presses, go to standby (the moving screensaver). Pressing
+    # anything restarts the count; ordinary shows never trigger it. 0 = never.
+    idle_standby_minutes: float = 10.0
     osd_duration: float = 2.0             # how long volume/message overlays linger
     ui: UiConfig = field(default_factory=UiConfig)
     crt: CrtConfig = field(default_factory=CrtConfig)
@@ -472,6 +477,9 @@ def config_from_dict(data: Dict[str, Any], *, base_dir: Optional[Path] = None) -
         transition_duration=_clamp_float(data.get("transition_duration", 0.4), 0.0, 10.0, "transition_duration"),
         bridge_seconds=_clamp_float(data.get("bridge_seconds", 0.8), 0.0, 10.0, "bridge_seconds"),
         channel_bug_seconds=_clamp_float(data.get("channel_bug_seconds", 4.0), 0.0, 60.0, "channel_bug_seconds"),
+        idle_standby_minutes=_clamp_float(
+            data.get("idle_standby_minutes", 10.0), 0.0, 24 * 60.0, "idle_standby_minutes"
+        ),
         osd_duration=_clamp_float(data.get("osd_duration", 2.0), 0.0, 60.0, "osd_duration"),
         ui=_parse_ui(data.get("ui")),
         crt=_parse_crt(data.get("crt")),

@@ -96,6 +96,12 @@ channels:
 tune_in: random
 
 start_channel: 2          # which channel the box powers on to
+# Burn-in guard: after this many minutes on a STILL screen - the guide card, a
+# locked channel's lock screen, an empty channel's colour bars - with nobody
+# pressing a button, go to standby (the drifting-logo screensaver). Any press
+# restarts the count, and ordinary shows never trigger it. 0 turns it off.
+idle_standby_minutes: 10
+
 # Where the remote's HOME button goes. Leave it out and HOME uses start_channel.
 # Point both at a "welcome" channel (see the guide channel below) to get the
 # hotel-TV behaviour: the box boots onto a card listing what's on, and HOME

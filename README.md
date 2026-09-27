@@ -481,7 +481,7 @@ channel" in Part F) so channel 1 lists it.
 | Back to the last channel watched | Back |
 | Jump to a channel | Type the number, then OK (needs a number pad) |
 | Unlock a locked channel | ◀ / ▶ pick each digit, OK for the next |
-| Standby — the logo drifts and bounces, so nothing burns into the TV | Power |
+| Standby — the logo drifts and bounces, so nothing burns into the TV | Power (it also goes there by itself after 10 minutes on the guide, a lock screen, or "no signal" with no button pressed) |
 | **Turn off** (safe to unplug) | At volume 0, let go, then press Vol − once more |
 
 Turn it on by plugging in power; it boots back to a channel automatically.
