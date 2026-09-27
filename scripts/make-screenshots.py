@@ -43,7 +43,7 @@ CLIP_URL = (
     "https://upload.wikimedia.org/wikipedia/commons/transcoded/c/c0/"
     "Big_Buck_Bunny_4K.webm/Big_Buck_Bunny_4K.webm.480p.vp9.webm"
 )
-USER_AGENT = "TimewarpTV-docs/1.0 (README screenshots; https://github.com/RobErskine/NostalgiaBox)"
+USER_AGENT = "TimewarpTV-docs/1.0 (README screenshots; https://github.com/RobErskine/TimewarpTV)"
 
 # The line-up shown on the guide card - the one the box was built for.
 LINEUP = [

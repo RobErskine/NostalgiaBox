@@ -198,8 +198,8 @@ Install git (if needed), download the project, and run the installer:
 ```bash
 sudo apt update
 sudo apt install -y git
-git clone https://github.com/RobErskine/NostalgiaBox.git ~/NostalgiaBox
-cd ~/NostalgiaBox
+git clone https://github.com/RobErskine/TimewarpTV.git ~/TimewarpTV
+cd ~/TimewarpTV
 ./scripts/install.sh
 ```
 
@@ -525,7 +525,7 @@ Turn it on by plugging in power; it boots back to a channel automatically.
 If a newer version is released:
 
 ```bash
-cd ~/NostalgiaBox
+cd ~/TimewarpTV        # ~/NostalgiaBox on a box set up before the rename
 git pull
 sudo systemctl restart nostalgiabox
 ```
@@ -702,8 +702,7 @@ and volume bar, the CRT look. Thank you.
 
 You'll still see the original name in a few technical places, kept on purpose
 because an installed box depends on them: the `nostalgiabox` command and Python
-package, the `nostalgiabox` service, the `/media/nostalgiabox` mount point, and
-this repository's address.
+package, the `nostalgiabox` service, and the `/media/nostalgiabox` mount point.
 
 ## License
 
