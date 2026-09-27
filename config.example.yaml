@@ -148,9 +148,11 @@ ui:
   color: "#4DFF5A"        # phosphor green for CH banner, volume bar, messages
   dim_color: "#123B18"    # (reserved) colour for unlit elements
   glow: true              # soft CRT-style glow around the text
-  logo: true              # "TWT" corner mark on the banner and the volume bar
-                          #   (a placeholder - see _logo_ass in overlay.py)
-  brand: "TIME WARP TV"   # station name, shown on the welcome channel's card
+  logo: true              # the Time Warp TV mark (assets/logo.svg) in the
+                          #   corner of the channel banner and volume bar
+  # The guide card's header is the logo + wordmark (assets/wordmark.svg). Set a
+  # different name here and it's typed out in the header instead.
+  brand: "TIME WARP TV"
 
 # --- CRT picture effect (for 4:3 shows on a flat TV) -------------------------
 # Bends the picture like a tube TV: a gentle bulge, rounded corners, a vignette

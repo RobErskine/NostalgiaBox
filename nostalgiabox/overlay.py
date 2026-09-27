@@ -19,6 +19,7 @@ from __future__ import annotations
 import time
 from typing import Callable, Dict, Optional
 
+from . import brand as brand_art
 from .config import Config, UiConfig
 from .player import Player
 
@@ -202,8 +203,8 @@ def _channel_bug_ass(
         lines.append(
             rf"{{\an9\pos({_IX1},{_IY0 + 104 + 48}){_style(ui, size=28)}}}{_escape(subtitle)}"
         )
-    if ui.logo:
-        lines.append(_logo_ass(ui))
+    if ui.logo and (logo := _logo_ass(ui)):
+        lines.append(logo)
     return "\n".join(lines)
 
 
@@ -235,8 +236,8 @@ def _volume_ass(level: int, muted: bool, ui: UiConfig) -> str:
             )
         else:
             parts.append(_dot(cx=cx, cy=row_top + bar_h / 2, r=dot_r, fill=green))
-    if ui.logo:
-        parts.append(_logo_ass(ui))
+    if ui.logo and (logo := _logo_ass(ui)):
+        parts.append(logo)
     return "\n".join(parts)
 
 
@@ -355,6 +356,39 @@ _GUIDE_COL_NAME = _FRAME_CX - 170
 _GUIDE_COL_TAG = _FRAME_CX + 250
 
 
+_GUIDE_LOGO_H = 96
+_GUIDE_WORDMARK_H = 42
+_GUIDE_LOCKUP_GAP = 22
+
+
+def _guide_header(ui: UiConfig, brand: Optional[str]) -> list:
+    """The station's name at the top of the card: the logo and wordmark side by
+    side - unless a custom name is set (``ui.brand`` or ``brand``), or the
+    artwork can't be loaded, in which case the name is typed out."""
+    logo, wordmark = brand_art.logo(), brand_art.wordmark()
+    custom = brand or (ui.brand if ui.brand != UiConfig().brand else None)
+    if custom or logo is None or wordmark is None:
+        title = _escape(custom or ui.brand)
+        return [rf"{{\an8\pos({_FRAME_CX},{_IY0}){_style(ui, size=_GUIDE_TITLE_SIZE)}}}{title}"]
+
+    fill, edge = _hex_to_ass(ui.color), _hex_to_ass(ui.dim_color)
+    logo_w = _GUIDE_LOGO_H * logo.aspect
+    word_w = _GUIDE_WORDMARK_H * wordmark.aspect
+    x0 = _FRAME_CX - (logo_w + _GUIDE_LOCKUP_GAP + word_w) / 2
+    top = _IY0 - 8
+    return [
+        brand_art.art_ass(logo, x=x0, y=top, height=_GUIDE_LOGO_H, fill=fill, edge=edge),
+        brand_art.art_ass(
+            wordmark,
+            x=x0 + logo_w + _GUIDE_LOCKUP_GAP,
+            y=top + (_GUIDE_LOGO_H - _GUIDE_WORDMARK_H) / 2,
+            height=_GUIDE_WORDMARK_H,
+            fill=fill,
+            edge=edge,
+        ),
+    ]
+
+
 def guide_ass(
     channels: list, ui: UiConfig, *, brand: Optional[str] = None, hint: str = ""
 ) -> str:
@@ -366,11 +400,10 @@ def guide_ass(
     or not the box is forcing 4:3. Row height shrinks to fit a long line-up
     rather than running off the bottom of the screen.
     """
-    title = _escape(brand or ui.brand)
-    lines = [
-        rf"{{\an8\pos({_FRAME_CX},{_IY0}){_style(ui, size=_GUIDE_TITLE_SIZE)}}}{title}",
-        rf"{{\an8\pos({_FRAME_CX},{_IY0 + 88}){_style(ui, size=30)}}}CHANNEL GUIDE",
-    ]
+    lines = _guide_header(ui, brand)
+    lines.append(
+        rf"{{\an8\pos({_FRAME_CX},{_IY0 + 100}){_style(ui, size=30)}}}CHANNEL GUIDE"
+    )
 
     count = max(1, len(channels))
     row_h = min(_GUIDE_MAX_ROW_H, (_GUIDE_ROWS_BOTTOM - _GUIDE_ROWS_TOP) // count)
@@ -405,81 +438,29 @@ def guide_ass(
 # --------------------------------------------------------------------------
 # Corner logo
 # --------------------------------------------------------------------------
-# A "Time Warp TV" mark in the bottom-right corner, shown whenever the channel
-# banner or the volume bar is up. This is a PLACEHOLDER: the W held between two
-# portal rings is the idea, but the real mark is still to be drawn.
-#
-# It is built from ASS vector paths - the same primitive the volume bar's
-# rectangles and dots use - so it needs no image file and scales with the
-# canvas. libass cannot read SVG, but an SVG path converts almost directly:
-# "M x y" -> "m x y", "L x y" -> "l x y", "C ..." -> "b ...". So when the real
-# logo exists as an SVG of simple paths, only _logo_ass below has to change.
+# The Time Warp TV mark in the bottom-right corner, shown whenever the channel
+# banner or the volume bar is up. Drawn from assets/logo.svg (see brand.py) as
+# vector paths, like the volume bar - so it scales with the canvas and swapping
+# the SVG swaps the logo everywhere.
 
-_LOGO_SIZE = 52                          # cap height of the three letters
+_LOGO_H = 80
 _LOGO_RIGHT = _IX1                       # right edge, on the safe-area margin
-_LOGO_CY = _BAR_ROW_TOP - 46             # clear of the volume bar underneath
-_LOGO_LETTER_GAP = 56                    # centre-to-centre, T to W to T
-_PORTAL_RX = 12
-_PORTAL_RY = 30
-_PORTAL_GAP = 25                         # portal centre offset from the W's;
-                                         # their inner edges just graze the W
+_LOGO_BOTTOM = _BAR_ROW_TOP - 10         # clear of the volume bar underneath
+_LOGO_TOP = _LOGO_BOTTOM - _LOGO_H
 
 
 def _logo_ass(ui: UiConfig) -> str:
-    """The corner mark: T W T, with the middle W held between two portals."""
-    green = _hex_to_ass(ui.color)
-    # Laid out right-to-left, so the mark always ends flush with the margin.
-    t_right = _LOGO_RIGHT - 18
-    w_mid = t_right - _LOGO_LETTER_GAP
-    t_left = w_mid - _LOGO_LETTER_GAP
-
-    parts = [
-        # Tight around the W, so it reads as held between them rather than
-        # sitting beside them.
-        _ring(cx=w_mid - _PORTAL_GAP, cy=_LOGO_CY,
-              rx=_PORTAL_RX, ry=_PORTAL_RY, stroke=green),
-        _ring(cx=w_mid + _PORTAL_GAP, cy=_LOGO_CY,
-              rx=_PORTAL_RX, ry=_PORTAL_RY, stroke=green),
-        rf"{{\an5\pos({t_left},{_LOGO_CY}){_style(ui, size=_LOGO_SIZE)}}}T",
-        rf"{{\an5\pos({t_right},{_LOGO_CY}){_style(ui, size=_LOGO_SIZE)}}}T",
-        # The W is a little larger and sheared, as if pulled by the portals.
-        rf"{{\an5\pos({w_mid},{_LOGO_CY}){_style(ui, size=_LOGO_SIZE + 8)}"
-        rf"\fax-0.1}}W",
-    ]
-    return "\n".join(parts)
-
-
-def _ellipse_path(rx: float, ry: float) -> str:
-    """An ellipse as four cubic bezier arcs, drawn from its top-left corner.
-
-    Coordinates start at (0, 0) and run to (2rx, 2ry) rather than being centred
-    on the origin, so the shape can be placed with ``\\an7`` - see _ring.
-    """
-    hx, hy = round(0.5523 * rx, 2), round(0.5523 * ry, 2)
-    x0, y0 = round(rx, 2), round(ry, 2)          # centre, in path coordinates
-    w, h = round(2 * rx, 2), round(2 * ry, 2)
-    return (
-        f"m {x0} 0 "
-        f"b {x0 + hx} 0 {w} {y0 - hy} {w} {y0} "
-        f"b {w} {y0 + hy} {x0 + hx} {h} {x0} {h} "
-        f"b {x0 - hx} {h} 0 {y0 + hy} 0 {y0} "
-        f"b 0 {y0 - hy} {x0 - hx} 0 {x0} 0"
-    )
-
-
-def _ring(*, cx: float, cy: float, rx: float, ry: float, stroke: str) -> str:
-    """An unfilled ellipse outline: a transparent fill plus a coloured border.
-
-    Anchored top-left (``\\an7``) at the shape's bounding box, like
-    :func:`_filled_rect`. Centring a *bordered* drawing with ``\\an5`` does not
-    land where the arithmetic says it should - libass sizes the box differently
-    once there is a border - so the corner is positioned explicitly instead.
-    """
-    path = _ellipse_path(rx, ry)
-    x, y = round(cx - rx), round(cy - ry)
-    return (
-        rf"{{\an7\pos({x},{y})\p1"
-        rf"\1a&HFF&\bord2\3c{stroke}\3a&H00&\shad0}}{path}{{\p0}}"
+    """The corner mark, or "" if the artwork can't be loaded."""
+    art = brand_art.logo()
+    if art is None:
+        return ""
+    return brand_art.art_ass(
+        art,
+        x=_LOGO_RIGHT - _LOGO_H * art.aspect,
+        y=_LOGO_TOP,
+        height=_LOGO_H,
+        fill=_hex_to_ass(ui.color),
+        edge=_hex_to_ass(ui.dim_color),
     )
 
 
@@ -500,9 +481,9 @@ def _filled_rect(
 
 
 def _outlined_rect(*, x: float, y: float, w: float, h: float, stroke: str) -> str:
-    """A hollow rectangle: transparent fill, coloured border. Anchored top-left
-    for the same reason as :func:`_ring` - a bordered drawing centred with
-    ``\\an5`` doesn't land where the arithmetic says."""
+    """A hollow rectangle: transparent fill, coloured border. Anchored top-left,
+    because a bordered drawing centred with ``\\an5`` doesn't land where the
+    arithmetic says (libass sizes the box differently once there's a border)."""
     x, y = round(x), round(y)
     w, h = round(w), round(h)
     draw = f"m 0 0 l {w} 0 l {w} {h} l 0 {h} l 0 0"  # closed: square corners

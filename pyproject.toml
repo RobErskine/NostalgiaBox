@@ -40,5 +40,10 @@ nostalgiabox = "nostalgiabox.__main__:main"
 [tool.setuptools.packages.find]
 include = ["nostalgiabox*"]
 
+# Ship the OSD font and the brand artwork with the code. (The Pi's editable
+# install reads them from the checkout, but a plain `pip install .` would not.)
+[tool.setuptools.package-data]
+nostalgiabox = ["assets/fonts/*", "assets/*.svg"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

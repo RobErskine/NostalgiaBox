@@ -166,20 +166,19 @@ def _logo_lines(on):
     return _logo_ass(_ui_with_logo(on))
 
 
-def test_logo_has_two_portals_and_three_letters():
+def test_logo_is_the_svg_artwork():
+    """The corner mark is drawn from assets/logo.svg as one vector drawing."""
     ass = _logo_lines(True)
-    lines = ass.split("\n")
 
-    assert len(lines) == 5
-    assert sum(1 for line in lines if "\\p1" in line) == 2      # portal rings
-    assert [line[-1] for line in lines[2:]] == ["T", "T", "W"]
+    assert "\n" not in ass                      # a single event
+    assert r"\p1" in ass and ass.count(" b ") > 50   # its bezier curves
 
 
 def test_logo_sits_clear_of_the_volume_bar():
     """The mark must not overlap the bar it shares the bottom of the screen with."""
-    from nostalgiabox.overlay import _BAR_ROW_TOP, _LOGO_CY, _PORTAL_RY
+    from nostalgiabox.overlay import _BAR_ROW_TOP, _LOGO_BOTTOM
 
-    assert _LOGO_CY + _PORTAL_RY < _BAR_ROW_TOP
+    assert _LOGO_BOTTOM < _BAR_ROW_TOP
 
 
 def test_logo_stays_inside_the_safe_area():
@@ -222,12 +221,25 @@ def test_guide_marks_only_locked_channels():
     assert ass.count("LOCKED") == 1
 
 
-def test_guide_uses_the_brand_name():
+def test_guide_header_is_the_logo_and_wordmark():
     from nostalgiabox.config import UiConfig
     from nostalgiabox.overlay import guide_ass
 
-    assert "TIME WARP TV" in guide_ass([_Ch(1, "Guide")], UiConfig())
-    assert "KID TV" in guide_ass([_Ch(1, "Guide")], UiConfig(brand="KID TV"))
+    ass = guide_ass([_Ch(1, "Guide")], UiConfig())
+    header = [line for line in ass.split("\n") if r"\p1" in line]
+
+    assert len(header) == 2                     # logo + wordmark, as drawings
+    assert "TIME WARP TV" not in ass            # not typed out as text
+
+
+def test_a_custom_station_name_is_typed_instead():
+    from nostalgiabox.config import UiConfig
+    from nostalgiabox.overlay import guide_ass
+
+    ass = guide_ass([_Ch(1, "Guide")], UiConfig(brand="KID TV"))
+
+    assert "KID TV" in ass
+    assert r"\p1" not in ass
 
 
 def test_guide_rows_stay_inside_the_safe_area():
@@ -319,13 +331,13 @@ def test_long_codes_still_fit_inside_the_panel():
 def test_lock_panel_clears_the_banner_volume_bar_and_logo():
     """Vol +/- and the channel banner both appear over the lock screen."""
     from nostalgiabox.overlay import (
-        _BAR_ROW_TOP, _IY0, _LOCK_PANEL_H, _LOCK_PANEL_Y, _LOGO_CY, _PORTAL_RY,
+        _BAR_ROW_TOP, _IY0, _LOCK_PANEL_H, _LOCK_PANEL_Y, _LOGO_TOP,
     )
 
     panel_bottom = _LOCK_PANEL_Y + _LOCK_PANEL_H
     assert _LOCK_PANEL_Y > _IY0 + 104 + 40              # below the show-name line
     assert panel_bottom < _BAR_ROW_TOP - 62             # above the "Volume" label
-    assert panel_bottom < _LOGO_CY - _PORTAL_RY         # above the corner logo
+    assert panel_bottom < _LOGO_TOP                     # above the corner logo
 
 
 def test_lock_screen_masks_entered_digits_and_highlights_the_dial():

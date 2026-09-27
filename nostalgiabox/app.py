@@ -41,6 +41,10 @@ from .static_gen import (
 # listening for an OK/ENTER press before it just... resumes.
 RESUME_OFFER_SECONDS = 6.0
 
+# The power-off press (volume-down at zero) must come at least this long after
+# the previous volume-down, so a held, auto-repeating button can't trigger it.
+POWER_OFF_PAUSE_SECONDS = 1.0
+
 log = logging.getLogger(__name__)
 
 
@@ -72,6 +76,7 @@ class TVApp:
         # Runtime state.
         self.volume = config.initial_volume
         self.muted = False
+        self._last_volume_down = float("-inf")
         self.standby = False
         self.powered_off = False
         self._playing_path: Optional[Path] = None
@@ -462,8 +467,18 @@ class TVApp:
         self._set_volume(self.volume + self.config.volume_step, unmute=True)
 
     def _volume_down(self) -> None:
-        # One press below zero cleanly powers off the box (safe to unplug).
-        if self.config.power_off_on_min_volume and not self.muted and self.volume <= 0:
+        # One press below zero cleanly powers off the box (safe to unplug) - but
+        # only a deliberate press, made after a pause. Volume keys auto-repeat
+        # when held, and without the pause, holding Vol- from 70 ran through
+        # zero and shut the box down in about a second.
+        now = self._clock()
+        previous, self._last_volume_down = self._last_volume_down, now
+        if (
+            self.config.power_off_on_min_volume
+            and not self.muted
+            and self.volume <= 0
+            and now - previous >= POWER_OFF_PAUSE_SECONDS
+        ):
             self._power_off()
             return
         self._set_volume(self.volume - self.config.volume_step, unmute=True)

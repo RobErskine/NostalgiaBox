@@ -438,9 +438,11 @@ or label? `./scripts/install-service.sh /your/mount/path YOURLABEL`.
 
 Kids will unplug it. Two things keep the SD card from getting corrupted:
 
-- **Turn it off with the remote:** turn the volume all the way down to 0, then
-  press volume-down **once more** — the Pi shuts down cleanly ("GOODBYE"), and
-  it's safe to unplug once the green light stops blinking.
+- **Turn it off with the remote:** turn the volume all the way down to 0, let
+  go, then press volume-down **once more** — the Pi shuts down cleanly
+  ("GOODBYE"), and it's safe to unplug once the green light stops blinking.
+  (Holding the button down stops at 0 on purpose, so it can't be done by
+  accident. To turn it back on, unplug the power and plug it in again.)
 - **Read-only mode — do this if the box moves around.** Run `sudo raspi-config`
   → **Performance Options → Overlay File System → Enable** (and write-protect
   the boot partition), then reboot. The SD card becomes read-only, so pulling
@@ -480,7 +482,7 @@ channel" in Part F) so channel 1 lists it.
 | Jump to a channel | Type the number, then OK (needs a number pad) |
 | Unlock a locked channel | ◀ / ▶ pick each digit, OK for the next |
 | Standby (blank screen) | Power |
-| **Turn off** (safe to unplug) | Volume-down again when already at 0 |
+| **Turn off** (safe to unplug) | At volume 0, let go, then press Vol − once more |
 
 Turn it on by plugging in power; it boots back to a channel automatically.
 

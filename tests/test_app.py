@@ -84,11 +84,12 @@ def test_volume_clamps(tmp_path):
 
 
 def test_volume_down_at_zero_powers_off(tmp_path):
-    app, player, _ = build_app(tmp_path, initial_volume=10, volume_step=5)
+    app, player, clock = build_app(tmp_path, initial_volume=10, volume_step=5)
     app.start()
     send(app, Action.VOLUME_DOWN)   # 10 -> 5
     send(app, Action.VOLUME_DOWN)   # 5 -> 0
     assert app.volume == 0 and not app.powered_off
+    clock.advance(1.5)              # a pause: this next press is deliberate
     send(app, Action.VOLUME_DOWN)   # one more at 0 -> power off
     assert app.powered_off is True
     assert app._running is False
@@ -463,14 +464,15 @@ def test_standby_relocks_channel(tmp_path):
 
 
 def test_power_off_relocks_channel(tmp_path):
-    app, player, _ = build_locked_app(tmp_path, initial_volume=5, volume_step=5)
+    app, player, clock = build_locked_app(tmp_path, initial_volume=5, volume_step=5)
     app.start()
     send(app, Action.CHANNEL_UP)
     for digit in (1, 9, 9, 7):
         send(app, Action.DIGIT, digit)
     assert app.lineup.select_number(9).locked is False
     send(app, Action.VOLUME_DOWN)  # 5 -> 0
-    send(app, Action.VOLUME_DOWN)  # one more at 0 -> power off
+    clock.advance(1.5)
+    send(app, Action.VOLUME_DOWN)  # a deliberate press at 0 -> power off
     assert app.powered_off is True
     assert app.lineup.select_number(9).locked is True
 
@@ -865,3 +867,30 @@ def test_dial_buttons_skip_episodes_again_once_unlocked(tmp_path):
     send(app, Action.NEXT_EPISODE)
 
     assert player.current != before
+
+
+def test_holding_volume_down_does_not_run_through_into_power_off(tmp_path):
+    """A held Vol- auto-repeats every few tens of ms; it must stop at 0."""
+    app, _, clock = build_app(tmp_path, initial_volume=70, volume_step=5)
+    app.start()
+
+    for _ in range(40):             # ~1.3s of a held button, well past zero
+        send(app, Action.VOLUME_DOWN)
+        clock.advance(0.033)
+
+    assert app.volume == 0
+    assert app.powered_off is False
+
+
+def test_a_fresh_press_after_holding_to_zero_does_power_off(tmp_path):
+    app, _, clock = build_app(tmp_path, initial_volume=10, volume_step=5)
+    app.start()
+    for _ in range(10):
+        send(app, Action.VOLUME_DOWN)
+        clock.advance(0.033)
+    assert app.powered_off is False
+
+    clock.advance(1.2)              # let go, then press again on purpose
+    send(app, Action.VOLUME_DOWN)
+
+    assert app.powered_off is True
