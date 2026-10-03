@@ -1,4 +1,4 @@
-"""Command-line entry point: ``nostalgiabox`` / ``python -m nostalgiabox``."""
+"""Command-line entry point: ``timewarptv`` (or ``python -m nostalgiabox``)."""
 
 from __future__ import annotations
 
@@ -18,6 +18,8 @@ log = logging.getLogger("nostalgiabox")
 # Places we look for a config file when one isn't given explicitly.
 _DEFAULT_CONFIG_LOCATIONS = (
     Path("config.yaml"),
+    # The media drive, where an installed box keeps its config (see README).
+    Path("/media/nostalgiabox/config.yaml"),
     Path.home() / ".config" / "nostalgiabox" / "config.yaml",
     Path("/etc/nostalgiabox/config.yaml"),
 )
@@ -86,7 +88,8 @@ def _list_audio_devices() -> int:
             name = dev.get("name", "?")
             desc = dev.get("description", "")
             print(f"  {name}\n      {desc}")
-        print("\nFor a TV, pick the HDMI one, e.g. audio_device: \"alsa/hdmi:CARD=vc4hdmi0,DEV=0\"")
+        print("\nFor a TV, pick an HDMI one (\"vc4hdmi\" on a Raspberry Pi), e.g.\n"
+              "  audio_device: \"alsa/default:CARD=vc4hdmi\"")
         player.terminate()
         return 0
     except Exception as exc:  # noqa: BLE001
@@ -97,7 +100,7 @@ def _list_audio_devices() -> int:
 
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="nostalgiabox",
+        prog="timewarptv",
         description="TimewarpTV - a retro TV media player for a Raspberry Pi.",
     )
     parser.add_argument("-c", "--config", help="path to the YAML config file")
@@ -122,6 +125,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--check",
         action="store_true",
         help="validate the config, list channels/episodes, and exit",
+    )
+    parser.add_argument(
+        "--make-guide",
+        action="store_true",
+        help="render the channel-1 guide card from the config, into "
+        "<config folder>/01-guide/welcome.mp4, and exit",
     )
     parser.add_argument(
         "--generate-assets",
@@ -178,6 +187,14 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.check:
         return _cmd_check(config)
+
+    if args.make_guide:
+        from .guide_gen import GUIDE_FILENAME, generate_guide
+
+        out = config_path.resolve().parent / "01-guide" / GUIDE_FILENAME
+        generate_guide(config, out)
+        print(f"wrote {out}")
+        return 0
 
     from .app import run_from_config
 

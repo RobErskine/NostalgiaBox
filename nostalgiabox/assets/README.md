@@ -8,7 +8,7 @@ This folder holds the short filler clips the TV uses:
 These are **generated with ffmpeg**, not committed to git. Create them with:
 
 ```bash
-nostalgiabox --generate-assets
+timewarptv --generate-assets
 # or
 python -m nostalgiabox.static_gen
 ```

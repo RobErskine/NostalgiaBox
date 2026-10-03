@@ -10,8 +10,7 @@ new state, no new code path, and cannot break playback. The cost is that the
 card has to be regenerated when the line-up changes - which is what this module
 is for. It runs headless, so it works on the Pi itself as well as a desktop::
 
-    python -m nostalgiabox.guide_gen --config /media/nostalgiabox/config.yaml \\
-        --out /media/nostalgiabox/01-guide/welcome.mp4
+    timewarptv --make-guide        # -> <config folder>/01-guide/welcome.mp4
 
 The card is drawn by :func:`nostalgiabox.overlay.guide_ass`, so it uses the same
 font, phosphor green and edge as the channel banner and volume bar. libass does

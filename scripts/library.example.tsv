@@ -1,0 +1,31 @@
+# TimewarpTV library manifest - read by scripts/build-library.sh.
+#
+# Copy this file to scripts/library.tsv (kept out of git: it's your library)
+# and replace the example rows with your own.
+#
+# One row per source folder:  <channel-folder> TAB <path under the source root>
+# Each source folder is copied to <drive>/<channel-folder>/<source folder name>/,
+# so several shows can share one channel.
+#
+# "SKIP" as the channel keeps a folder off the drive. Every folder directly
+# under "TV Shows/" and "Movies/" in the source must appear exactly once - as a
+# row or a SKIP - so a newly added show can't be silently left off.
+#
+# Lines starting with # and blank lines are ignored. Columns are TAB-separated.
+
+# --- CH 2 Playhouse: preschool -------------------------------------------------
+02-playhouse	TV Shows/Example Puppet Show (1997)
+02-playhouse	Movies/Example Sing-Along (1990)
+
+# --- CH 5 Kids: cartoons ---------------------------------------------------------
+05-kids	TV Shows/Example Cartoon (1998)
+05-kids	TV Shows/Another Example Cartoon (2001)
+
+# --- CH 7 Movie Night: family films ----------------------------------------------
+07-kid-movies	Movies/Example Family Film (2003)
+
+# --- CH 9 Late Night: grown-ups only ------------------------------------------------
+09-late-night	TV Shows/Example Late-Night Cartoon (2000)
+
+# --- Kept off the drive ----------------------------------------------------------
+SKIP	TV Shows/Example Show Nobody Watches (2015)

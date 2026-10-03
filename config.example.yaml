@@ -1,88 +1,73 @@
 # =============================================================================
 # TimewarpTV configuration
 # =============================================================================
-# Copy this file to `config.yaml` (or /etc/nostalgiabox/config.yaml) and edit it
-# to match the show folders on your SD card. Validate it any time with:
+# This file lives in the ROOT of your media drive, as `config.yaml`, next to
+# the channel folders. The box reads it from there, so channels can be changed
+# from any computer the drive is plugged into - no terminal on the Pi needed.
+# Check it any time with:
 #
-#     nostalgiabox --check
+#     timewarptv --check
 #
-# There are two ways to define channels. Pick ONE.
+# Folder paths are relative to this file, so the same config works whether the
+# drive is mounted on the Pi or on your computer. The drive looks like:
+#
+#   WARPMEDIA/
+#   ├── config.yaml          <- this file
+#   ├── 01-guide/            <- the welcome card (timewarptv --make-guide)
+#   ├── 02-playhouse/        <- one folder per channel; shows go inside,
+#   ├── 05-kids/                season sub-folders and all
+#   ├── 07-kid-movies/
+#   ├── 09-late-night/
+#   └── breaks/              <- optional break clips
+#
+# scripts/build-library.sh can fill these folders from a Plex-style library.
 
-# -----------------------------------------------------------------------------
-# OPTION A (easiest): auto-discover channels from a media folder.
-# -----------------------------------------------------------------------------
-# Point `media_root` at a folder; every sub-folder becomes a channel, named
-# after the folder and numbered sequentially. Just drop show folders in and go:
-#
-#   /media/nostalgiabox/
-#     ├── Dragon Tales/          -> channel 2 "Dragon Tales"
-#     ├── Arthur/                -> channel 3 "Arthur"
-#     └── Winnie the Pooh/       -> channel 4 "Winnie The Pooh"
-#
-# media_root: /media/nostalgiabox
-# first_channel_number: 2      # what the first discovered channel is numbered
-
-# -----------------------------------------------------------------------------
-# OPTION B (explicit): list channels yourself for full control of numbers/names.
-# -----------------------------------------------------------------------------
 channels:
-  # A "welcome" channel, like the one a hotel TV boots onto: a still card
-  # listing what is on every other channel. It is an ordinary channel holding
-  # one very boring episode, which you generate from this very config with:
+  # Channel 1 is a "welcome" card, like the channel a hotel TV boots onto: a
+  # still picture listing every other channel. It's an ordinary channel holding
+  # one generated episode - make it, and remake it whenever channels change:
   #
-  #   python -m nostalgiabox.guide_gen --config config.yaml \
-  #       --out /media/nostalgiabox/01-guide/welcome.mp4
-  #
-  # Re-run it whenever you add or rename a channel. Pair it with
-  # home_channel: 1 above so the remote's HOME button comes back here.
+  #     timewarptv --make-guide
   - number: 1
     name: "Guide"
-    path: /media/nostalgiabox/01-guide
+    path: 01-guide
     breaks: false       # never interrupt the guide with a break clip
-    start_offset: 0     # always from the top; it is a still picture anyway
+    start_offset: 0     # always from the top; it's a still picture anyway
+
   - number: 2
-    name: "Dragon Tales"
-    path: /media/nostalgiabox/dragon-tales
-    breaks: false   # no break blocks on this channel, regardless of the global setting
-  - number: 3
-    name: "Arthur"
-    path: /media/nostalgiabox/arthur
+    name: "Playhouse"
+    path: 02-playhouse
+    breaks: false       # no break blocks on this channel, whatever the global setting
+
+  - number: 5
+    name: "Kids"
+    path: 05-kids
     # Leave out episodes you don't want on this channel:
     exclude_seasons: ["6-25"]      # drop seasons 6 through 25 (detected from
                                    #   names like S06E01, "Season 6", 6x01)
     exclude: ["*special*"]         # drop any file/folder whose path matches
-  - number: 4
-    name: "The Magic School Bus"
-    path: /media/nostalgiabox/magic-school-bus
-  - number: 5
-    name: "Bear in the Big Blue House"
-    path: /media/nostalgiabox/bear-in-the-big-blue-house
-  - number: 6
-    name: "Winnie the Pooh"
-    path: /media/nostalgiabox/winnie-the-pooh
+
   - number: 7
-    name: "The Berenstain Bears"
-    path: /media/nostalgiabox/berenstain-bears
-  - number: 8
-    name: "Mister Rogers' Neighborhood"
-    path: /media/nostalgiabox/mister-rogers
-  - number: 9
-    name: "Adult Swim"
-    path: /media/nostalgiabox/adult-swim
-    # Gate a channel behind a 4-digit-style code (digits only, 1-8 chars) -
-    # this is a kid gate, not real security; the code is stored in plain text.
-    # It stays unlocked only while you're on it: change channel and it locks
-    # again (as does standby/power-off), so coming back asks for the code.
-    passcode: "1997"
-    locked_message: "ADULT SWIM - LIVE AT 9PM"
-  - number: 10
-    name: "Movies"
-    path: /media/nostalgiabox/movies
+    name: "Movie Night"
+    path: 07-kid-movies
     # Per-channel overrides of the global `tune_in` / `start_offset` below -
-    # handy for a movie channel: pick up where you left off, and start at 0:00
-    # instead of a few seconds in.
+    # right for a movie channel: pick up where you left off, from 0:00.
     tune_in: resume
     start_offset: 0
+
+  - number: 9
+    name: "Late Night"
+    path: 09-late-night
+    # A kid gate, not real security - the code is plain text in this file.
+    # 1-8 digits. Unlocked only while you're on it: change channel (or go to
+    # standby) and it locks again. The Argon remote unlocks it with an
+    # on-screen combination lock (< > to choose each digit, OK for the next).
+    passcode: "1997"
+    locked_message: "LATE NIGHT - LOCKED"
+
+# (Alternative to listing channels: `media_root: .` turns every sub-folder into
+# a channel, numbered alphabetically from `first_channel_number` - quick for a
+# simple drive, but it would also make `breaks/` a channel.)
 
 # -----------------------------------------------------------------------------
 # How a channel behaves when you tune into it.
@@ -95,7 +80,7 @@ channels:
 # -----------------------------------------------------------------------------
 tune_in: random
 
-start_channel: 2          # which channel the box powers on to
+start_channel: 1          # which channel the box powers on to (the guide)
 # Burn-in guard: after this many minutes on a STILL screen - the guide card, a
 # locked channel's lock screen, an empty channel's colour bars - with nobody
 # pressing a button, go to standby (the drifting-logo screensaver). Any press
@@ -103,27 +88,22 @@ start_channel: 2          # which channel the box powers on to
 idle_standby_minutes: 10
 
 # Where the remote's HOME button goes. Leave it out and HOME uses start_channel.
-# Point both at a "welcome" channel (see the guide channel below) to get the
-# hotel-TV behaviour: the box boots onto a card listing what's on, and HOME
-# brings a lost viewer straight back to it.
 # home_channel: 1
 
-# Where "resume" tune-in positions are saved, so they survive a power cut (not
-# just a channel change). Point it at the media drive so it works even if the
-# SD card is read-only (see the kid-proofing section of the README).
-# state_file: /media/nostalgiabox/.nostalgiabox-state.json
+# Where "resume" positions are saved, so they survive a power cut, not just a
+# channel change. On the drive, so it still works with the SD card read-only.
+state_file: .timewarptv-state.json
 
 # -----------------------------------------------------------------------------
 # Between-episode break blocks: old commercials, or your own bathroom/snack/
 # stretch break cards - just video files in a folder. Fires only when an
 # episode reaches a natural end, never mid-episode. Turn it off for a specific
-# channel with `breaks: false` on that channel (see the baby channel above).
+# channel with `breaks: false` on that channel (see Playhouse above).
 # -----------------------------------------------------------------------------
 # breaks:
-#   path: /media/nostalgiabox/breaks
+#   path: breaks
 #   every: 2        # a break block after every 2 episodes
 #   count: [1, 2]   # 1-2 clips per block (a single number is also fine)
-# (channel 2 below sets `breaks: false` to opt out even when this is on)
 
 # --- The "feel" of the TV ----------------------------------------------------
 # Shows keep their own aspect ratio (4:3 is pillar-boxed, 16:9 fills the screen)
@@ -152,8 +132,8 @@ osd_duration: 2           # how long the volume bar / messages linger
 ui:
   font: "VT323"           # bundled retro terminal font (installed by install.sh)
   color: "#4DFF5A"        # phosphor green for CH banner, volume bar, messages
-  dim_color: "#123B18"    # (reserved) colour for unlit elements
-  glow: true              # soft CRT-style glow around the text
+  dim_color: "#123B18"    # the dark "unlit phosphor" edge around text and art
+  glow: true              # true = that dark edge; false = a plain black one
   logo: true              # the Time Warp TV mark (assets/logo.svg) in the
                           #   corner of the channel banner and volume bar
   # The guide card's header is the logo + wordmark (assets/wordmark.svg). Set a
@@ -189,8 +169,8 @@ crt:
 initial_volume: 70        # 0-100
 volume_step: 5            # how much each volume press changes it
 # Force audio to a specific output. On a Pi the default can be the 3.5mm jack;
-# for a TV you want HDMI. Run `nostalgiabox --list-audio` to see the names.
-# audio_device: "alsa/hdmi:CARD=vc4hdmi0,DEV=0"   # HDMI0 (use vc4hdmi1 for HDMI1)
+# for a TV you want HDMI. Run `timewarptv --list-audio` to see the names.
+# audio_device: "alsa/default:CARD=vc4hdmi"   # HDMI on a Raspberry Pi 3
 
 # Pressing volume-down once more when already at 0 cleanly powers off the Pi so
 # it's safe to unplug (needs the sudo rule from scripts/install-service.sh).
@@ -203,9 +183,9 @@ scan_recursive: true      # also look inside season sub-folders for episodes
 # shuffle_seed: 1234       # set for a repeatable shuffle order (mostly for tests)
 
 # fullscreen: false        # run mpv in a window (handy on a dev machine; use
-                           #   `nostalgiabox --windowed` instead of editing this)
-# hwdec: "no"              # disable hardware decode - a fallback if playback
-                           #   stutters on a weaker GPU (e.g. a Raspberry Pi 3)
+                           #   `timewarptv --windowed` instead of editing this)
+# hwdec: "no"              # disable hardware decode - a fallback if a 1080p
+                           #   film stutters on a Raspberry Pi 3
 
 # Which player to drive. "auto" (default) uses libmpv on Linux/the Pi, and
 # drives the mpv binary over a JSON IPC socket on macOS - where libmpv cannot
@@ -224,16 +204,13 @@ input:
   # keyboard_devices: ["/dev/input/event0"]  # or pin exact devices
   # keyboard_grab: false             # true = stop keystrokes leaking to console
 
-  # Map specific keys to actions (handy for odd remotes). Find a button's key
-  # name with `sudo evtest`. Actions: channel_up, channel_down, volume_up,
-  # volume_down, mute, enter, info, last_channel, home, next_episode,
-  # previous_episode, power, quit, digit_0..digit_9, or none (to unbind). Example for a Logitech R400 presenter. NOTE: its
-  # play-screen button sends Escape (the quit key!), so remap KEY_ESC too or it
-  # will shut the box off.
+  # Map specific keys to actions - handy for a remote with odd keys, or a
+  # Flirc button taught a key TimewarpTV doesn't use. Find a key's name with
+  # `sudo evtest`. Actions: channel_up, channel_down, volume_up, volume_down,
+  # mute, enter, info, last_channel, home, next_episode, previous_episode,
+  # power, quit, digit_0..digit_9, or none (to unbind a key).
   # key_overrides:
-  #   KEY_PAGEUP: channel_down    # left  (<) arrow
-  #   KEY_PAGEDOWN: channel_up    # right (>) arrow
-  #   KEY_ESC: volume_down        # play-screen button (sends Esc)
-  #   KEY_F5: volume_down         #   ...and sometimes F5 - map both
-  #   KEY_DOT: volume_up          # blank-screen button
-  #   KEY_B: volume_up            #   ...blank button alt code - map both
+  #   KEY_PAGEUP: channel_up
+  #   KEY_PAGEDOWN: channel_down
+  #   KEY_F1: home
+  #   KEY_ESC: none               # stop a stray Esc from quitting the TV

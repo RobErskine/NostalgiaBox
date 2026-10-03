@@ -35,6 +35,8 @@ dev = [
 ]
 
 [project.scripts]
+timewarptv = "nostalgiabox.__main__:main"
+# The original command name, kept so existing installs keep working.
 nostalgiabox = "nostalgiabox.__main__:main"
 
 [tool.setuptools.packages.find]

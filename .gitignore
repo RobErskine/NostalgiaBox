@@ -10,11 +10,13 @@ dist/
 venv/
 
 # TimewarpTV
-# Each install has its own config (the installer creates it from
-# config.example.yaml). Keep personal configs out of the repo.
+# Each box has its own config, kept on its media drive. Keep personal configs
+# and library manifests out of the repo.
 config.yaml
-# Resume positions (config.yaml can keep them next to itself on the SD card).
+scripts/library.tsv
+# Resume positions (normally on the media drive, next to config.yaml).
 .nostalgiabox-state.json
+.timewarptv-state.json
 # Dev sandbox library + config (created by `scripts/make-dev-library.sh`).
 config.dev.yaml
 dev-media/

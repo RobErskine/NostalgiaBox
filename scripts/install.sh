@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# TimewarpTV installer for Raspberry Pi OS (Bookworm) / Debian-based systems.
+# TimewarpTV installer for Raspberry Pi OS Lite (Trixie; Bookworm works too).
 #
 # Installs system + Python dependencies, generates the filler assets, and
 # optionally installs a systemd service so the box boots straight into "TV mode".
@@ -57,10 +57,15 @@ fi
 # The config lives on the media drive, not here (see README, Part E). Check it
 # if the drive is already mounted; otherwise say so rather than validating a
 # sample config whose example folders can't exist.
+echo "==> Putting the timewarptv command on the PATH"
+# It lives in the virtual environment; link it so `timewarptv --check` works
+# from any shell, without activating anything.
+sudo ln -sf "${REPO_DIR}/.venv/bin/timewarptv" /usr/local/bin/timewarptv
+
 DRIVE_CONFIG="/media/nostalgiabox/config.yaml"
 if [[ -f "${DRIVE_CONFIG}" ]]; then
   echo "==> Checking the library on the drive"
-  nostalgiabox --check --config "${DRIVE_CONFIG}" || \
+  timewarptv --check --config "${DRIVE_CONFIG}" || \
     echo "   (fix ${DRIVE_CONFIG}, then re-run the check below)"
 else
   echo "==> Skipping the library check: the media drive isn't mounted yet"
@@ -83,7 +88,7 @@ Next steps:
      re-scan whenever it's plugged back in:
          ./scripts/install-service.sh
   3. Check what it found:
-         nostalgiabox --check --config /media/nostalgiabox/config.yaml
+         timewarptv --check
 
 Enjoy TimewarpTV!
 EOF

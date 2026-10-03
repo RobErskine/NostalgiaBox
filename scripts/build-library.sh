@@ -26,6 +26,11 @@ set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MANIFEST="${REPO_DIR}/scripts/library.tsv"
+if [[ ! -f "$MANIFEST" ]]; then
+  echo "error: no manifest at scripts/library.tsv" >&2
+  echo "       copy scripts/library.example.tsv to scripts/library.tsv and list your shows" >&2
+  exit 1
+fi
 
 # Must match DEFAULT_VIDEO_EXTENSIONS in nostalgiabox/config.py.
 VIDEO_EXTS="mp4 mkv avi m4v mov webm mpg mpeg ts"
